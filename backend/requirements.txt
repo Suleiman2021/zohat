@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+sqlmodel
+pyjwt
+bcrypt
+python-multipart
+openpyxl
+requests
+psycopg2-binary

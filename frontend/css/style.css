@@ -1,0 +1,293 @@
+/* ===== زوهات — التنسيق العام (RTL + متجاوب مع كل قياسات الشاشات) ===== */
+:root{
+  --navy:#183C60; --teal:#009CB4; --dteal:#006C84; --gold:#C9A227;
+  --bg:#F3F7FC; --card:#fff; --line:#D8E0EA; --ok:#2E7D32; --warn:#C0392B; --ink:#1c2b3a;
+  --muted:#5b7186;
+  --radius:14px; --radius-sm:10px;
+  --shadow:0 2px 10px rgba(24,60,96,.06);
+  --shadow-lg:0 16px 44px rgba(24,60,96,.16);
+  --tap:40px;                 /* أدنى ارتفاع لمس مريح */
+}
+*{box-sizing:border-box;font-family:"Segoe UI","Tahoma","Arial",sans-serif}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font-size:15px;line-height:1.55}
+.hidden{display:none!important}
+.err{color:var(--warn);font-size:13px;min-height:16px}
+img,svg{max-width:100%}
+
+:focus-visible{outline:2px solid var(--teal);outline-offset:2px;border-radius:4px}
+button{font-family:inherit;cursor:pointer;transition:background .15s,box-shadow .15s,transform .05s}
+button:active{transform:translateY(1px)}
+input,select,textarea{font-family:inherit;color:var(--ink);background:#fff}
+input:focus,select:focus{border-color:var(--teal)!important;box-shadow:0 0 0 3px rgba(0,156,180,.15)}
+
+/* ---------- شاشة الدخول ---------- */
+.login-screen{min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding:16px;
+  background:linear-gradient(135deg,var(--navy),var(--dteal))}
+.login-card{background:#fff;padding:32px 28px;border-radius:18px;width:min(100%,380px);
+  box-shadow:var(--shadow-lg);display:flex;flex-direction:column;gap:12px;text-align:center}
+.login-card h2{margin:4px 0 2px;font-size:18px;color:var(--navy)}
+.brand{font-size:30px;font-weight:800;color:var(--navy);line-height:1.15}
+.brand span{display:block;font-size:11px;color:var(--dteal);font-weight:600;letter-spacing:1px}
+.brand.small{font-size:24px}
+.login-card input{padding:12px;border:1px solid var(--line);border-radius:var(--radius-sm);font-size:16px}
+.login-card button,button.primary{background:var(--teal);color:#fff;border:0;padding:11px 18px;
+  border-radius:var(--radius-sm);font-size:15px;font-weight:700;min-height:var(--tap)}
+.login-card button:hover,button.primary:hover{background:var(--dteal)}
+button.primary.gold{background:var(--gold);color:#3a2c00}
+button.primary.gold:hover{background:#b8931f}
+.login-card small{color:#889}
+
+/* ---------- هيكل التطبيق ---------- */
+.app{display:grid;grid-template-columns:240px minmax(0,1fr);min-height:100vh;min-height:100dvh}
+.sidebar{background:var(--navy);color:#fff;display:flex;flex-direction:column;padding:16px;gap:4px}
+.side-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+.side-head .brand{color:#fff;margin:0}
+.nav-toggle{display:none;background:rgba(255,255,255,.12);color:#fff;border:0;font-size:20px;
+  width:42px;height:42px;border-radius:10px}
+.nav-toggle:hover{background:rgba(255,255,255,.22)}
+nav a{display:block;color:#cfe0f0;text-decoration:none;padding:11px 14px;border-radius:var(--radius-sm);
+  margin-bottom:4px;font-weight:600;cursor:pointer;transition:background .15s,color .15s}
+nav a:hover{background:rgba(255,255,255,.08)}
+nav a.active{background:var(--teal);color:#fff}
+.userbox{margin-top:auto;border-top:1px solid rgba(255,255,255,.15);padding-top:12px;font-size:13px}
+.role{color:var(--gold);font-weight:700;margin:2px 0 8px}
+.userbox button{width:100%;background:transparent;border:1px solid rgba(255,255,255,.35);
+  color:#fff;padding:9px;border-radius:9px;min-height:var(--tap)}
+.userbox button:hover{background:rgba(255,255,255,.1)}
+/* min-width:0 ضروري: بدونها يفرض جدول عريض داخل خلية Grid اتساع الصفحة كلها بدل التمرير داخلياً */
+.view{padding:22px;overflow:auto;min-width:0}
+
+h1{font-size:22px;margin:0 0 16px;color:var(--navy)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+  padding:16px;margin-bottom:16px;box-shadow:var(--shadow)}
+.card h3{margin:0 0 12px;font-size:16px;color:var(--navy)}
+.hint{color:var(--muted);font-size:12px;margin:6px 0 0}
+.warn-card{border-color:#f3d27a;background:#fffbea}
+
+/* ---------- مؤشرات KPI ---------- */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
+.kpi{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;text-align:center;
+  box-shadow:var(--shadow)}
+.kpi .label{font-size:12px;color:var(--muted);font-weight:600}
+.kpi .val{font-size:21px;font-weight:800;color:var(--navy);margin-top:4px;word-break:break-word}
+.kpi.cash .val{color:var(--ok)} .kpi.cod .val{color:var(--warn)} .kpi.gold{background:#FFF9E8}
+
+/* ---------- الجداول ---------- */
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{border:1px solid var(--line);padding:8px 10px;text-align:center;white-space:nowrap}
+th{background:var(--navy);color:#fff;font-weight:700;font-size:13px}
+tr:nth-child(even) td{background:#f7fafd}
+tbody tr:hover td{background:#eef6fb}
+/* حاوية الجداول — تمرير أفقي وعمودي مع رأس ثابت، تمنع اختفاء الجداول الطويلة/العريضة */
+.table-scroll{max-height:65vh;overflow:auto;border:1px solid var(--line);border-radius:var(--radius-sm);
+  -webkit-overflow-scrolling:touch}
+.table-scroll table{width:auto;min-width:100%}
+.table-scroll thead th{position:sticky;top:0;z-index:1;box-shadow:0 1px 0 var(--line)}
+
+/* ---------- الفلاتر والنماذج ---------- */
+.filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;
+  align-items:end;margin-bottom:14px}
+.filters label,form.grid label{font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px;
+  font-weight:600;min-width:0}
+.filters input,.filters select,form.grid input,form.grid select{
+  padding:9px 10px;border:1px solid var(--line);border-radius:9px;font-size:14px;width:100%;
+  min-height:var(--tap)}
+.filters button{min-height:var(--tap)}
+form.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+
+.badge{padding:2px 9px;border-radius:20px;font-size:12px;font-weight:700;display:inline-block}
+.badge.pend{background:#fdecea;color:var(--warn)} .badge.done{background:#e8f5e9;color:var(--ok)}
+.badge.warn{background:#fff3cd;color:#8a6500}
+
+button.sm{padding:7px 12px;font-size:12px;border-radius:8px;border:1px solid var(--line);
+  background:#fff;font-weight:600}
+button.sm:hover{background:#f2f7fb;border-color:var(--teal)}
+/* .sm بعد .primary في الترتيب كان يطغى بخلفية بيضاء — نعيد اللون لمن يجمع الصنفين */
+button.sm.primary{background:var(--teal);color:#fff;border-color:var(--teal)}
+button.sm.primary:hover{background:var(--dteal)}
+button.sm.danger{background:#fdecea;color:var(--warn);border-color:#f3c6c2}
+button.sm.danger:hover{background:#fbdad6}
+
+/* ---------- تبويبات الحسابات ---------- */
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+.tab{padding:9px 16px;border-radius:var(--radius-sm);border:1px solid var(--line);background:#fff;
+  font-weight:700;font-size:13px;color:var(--navy);min-height:var(--tap)}
+.tab:hover{border-color:var(--teal)}
+.tab.active{background:var(--navy);color:#fff;border-color:var(--navy)}
+h3.sub{margin:18px 0 8px;color:var(--dteal);font-size:15px}
+
+/* ---------- اللوغو والترويسات ---------- */
+.logo-login{width:min(260px,80%);margin:0 auto 4px;display:block}
+.logo-side{height:52px;display:block}
+.brand-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+  border-bottom:3px double var(--navy);padding-bottom:10px;margin-bottom:14px}
+.brand-head img{height:78px;flex-shrink:0}
+.bh-info{text-align:left}
+.bh-name{font-weight:800;color:var(--navy);font-size:16px}
+.bh-phone{font-weight:800;color:var(--dteal);font-size:15px;direction:ltr}
+.only-print{display:none}
+.print-title{color:var(--navy);font-size:18px;margin:0 0 10px}
+
+/* ---------- فاتورة الزبون ---------- */
+.invoice-sheet h2{color:var(--navy);margin-top:0}
+
+/* حقول التعديل داخل صفوف الجداول */
+.cell-in{width:100%;min-width:90px;padding:6px 8px;border:1px solid var(--teal);
+  border-radius:6px;font-size:13px;text-align:center}
+
+/* ---------- صفحة الطباعة والمعادلات ---------- */
+.chk-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:6px;margin-bottom:12px}
+label.chk{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--ink);
+  background:#f7fafd;border:1px solid var(--line);border-radius:9px;padding:8px 10px;cursor:pointer}
+label.chk input{width:16px;height:16px;accent-color:var(--teal)}
+.fx-row{border:1px solid var(--line);border-radius:var(--radius-sm);padding:12px;margin-bottom:10px;background:#fbfdff}
+.fx-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px}
+.fx-cell{font-size:11px;color:var(--dteal);background:#e8f6f8;border-radius:12px;padding:2px 10px;font-weight:700}
+.fx-in{width:100%;min-height:44px;margin-top:8px;padding:9px 10px;border:1px solid var(--line);
+  border-radius:8px;font-family:Consolas,Monaco,monospace;font-size:13px;resize:vertical;background:#fff}
+.fx-in:focus{border-color:var(--teal);box-shadow:0 0 0 3px rgba(0,156,180,.15);outline:none}
+.tiers-tbl{margin-bottom:8px}
+.tiers-tbl input{max-width:170px}
+
+/* ---------- صفحة القوائم والإعدادات ---------- */
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.chip{display:inline-flex;align-items:center;gap:6px;background:#f2f6fa;border:1px solid var(--line);
+  border-radius:20px;padding:7px 8px 7px 12px;font-size:13px}
+.chip.locked{background:#fff9e8;border-color:#f0e0a8}
+.chip button{border:0;background:transparent;font-size:13px;line-height:1;padding:4px 6px;
+  border-radius:50%;color:#678;min-width:26px;min-height:26px}
+.chip button:hover{background:rgba(0,0,0,.08)}
+.chip .chip-del:hover{color:var(--warn)}
+.chip .lock{font-size:12px}
+form.add-row{display:flex;gap:8px;flex-wrap:wrap}
+form.add-row input{flex:1;min-width:160px;padding:9px;border:1px solid var(--line);
+  border-radius:9px;font-size:14px;min-height:var(--tap)}
+
+/* ---------- معاينة حساب الجمارك ---------- */
+.breakdown{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:12px 0}
+.breakdown .cell{background:#f7fafd;border:1px solid var(--line);border-radius:var(--radius-sm);padding:10px}
+.breakdown .cell .k{font-size:11px;color:var(--muted);font-weight:600}
+.breakdown .cell .v{font-size:16px;font-weight:800;color:var(--navy);margin-top:2px;word-break:break-word}
+
+/* ---------- حالة فارغة + تحميل ---------- */
+.empty{text-align:center;color:var(--muted);padding:28px 10px}
+.empty span{font-size:34px;display:block;margin-bottom:6px}
+.empty p{margin:0;font-size:14px}
+.loading{display:grid;place-items:center;min-height:40vh}
+.spinner{width:38px;height:38px;border:4px solid var(--line);border-top-color:var(--teal);
+  border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ---------- الإشعارات (toast) ---------- */
+#toasts{position:fixed;bottom:18px;right:50%;transform:translateX(50%);z-index:1000;
+  display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none}
+.toast{background:var(--navy);color:#fff;padding:11px 20px;border-radius:24px;font-size:14px;
+  font-weight:600;box-shadow:var(--shadow-lg);opacity:0;transform:translateY(12px);
+  transition:opacity .25s,transform .25s;max-width:min(92vw,420px);text-align:center}
+.toast.show{opacity:1;transform:translateY(0)}
+.toast.err{background:var(--warn)}
+
+/* ---------- شريط تبويبات مقسّم (segmented) ---------- */
+.seg{display:inline-flex;background:#eaf1f7;border:1px solid var(--line);border-radius:12px;
+  padding:4px;gap:4px;margin-bottom:14px;flex-wrap:wrap}
+.seg-btn{border:0;background:transparent;color:var(--muted);font-weight:700;font-size:13px;
+  padding:8px 18px;border-radius:9px;min-height:36px}
+.seg-btn.active{background:#fff;color:var(--navy);box-shadow:var(--shadow)}
+.seg-btn:hover:not(.active){color:var(--navy)}
+
+/* ---------- شريط إجراء التصدير ---------- */
+.action-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:#eef8fb;
+  border:1px solid #bfe6ee;border-radius:12px;padding:10px 14px;margin-bottom:12px}
+.action-bar span{font-weight:800;color:var(--dteal)}
+.action-bar label{display:flex;flex-direction:column;font-size:11px;color:var(--muted);gap:3px}
+.action-bar input[type=date]{padding:8px;border:1px solid var(--line);border-radius:8px;min-height:var(--tap)}
+
+/* أعمدة صغيرة داخل الجداول */
+.chk-col{width:38px}
+.chk-col input{width:18px;height:18px;accent-color:var(--teal)}
+.nowrap{white-space:nowrap}
+td .mini{font-size:10px;color:var(--muted);margin-top:2px}
+
+/* ---------- رفع لوغو الشركة ---------- */
+.logo-row{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.logo-preview{width:150px;height:90px;border:1px dashed var(--line);border-radius:10px;
+  display:grid;place-items:center;background:#fafcfe;padding:6px;flex-shrink:0}
+.logo-preview img{max-width:100%;max-height:100%;object-fit:contain}
+.logo-actions{display:flex;flex-direction:column;gap:8px;align-items:flex-start}
+.file-btn{display:inline-flex;align-items:center;gap:6px;background:var(--teal);color:#fff;
+  font-weight:700;font-size:14px;padding:10px 16px;border-radius:var(--radius-sm);cursor:pointer;
+  min-height:var(--tap)}
+.file-btn:hover{background:var(--dteal)}
+.btn-row{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0}
+
+/* ---------- شاشات متوسطة وموبايل ---------- */
+@media(max-width:900px){
+  .app{grid-template-columns:1fr}
+  /* الشريط الجانبي يتحول لشريط علوي ثابت مع زر قائمة */
+  .sidebar{position:sticky;top:0;z-index:50;padding:10px 14px;
+    box-shadow:0 2px 12px rgba(0,0,0,.18)}
+  .side-head{margin-bottom:0}
+  .logo-side{height:40px}
+  .nav-toggle{display:block}
+  nav{display:none;flex-direction:column;padding-top:10px}
+  .userbox{display:none}
+  .sidebar.open nav{display:flex}
+  .sidebar.open .userbox{display:block}
+  nav a{min-height:var(--tap);display:flex;align-items:center}
+  .view{padding:16px}
+}
+@media(max-width:560px){
+  body{font-size:14px}
+  .view{padding:12px}
+  h1{font-size:19px;margin-bottom:12px}
+  .card{padding:12px;border-radius:12px}
+  .kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .kpi{padding:10px}
+  .kpi .val{font-size:17px}
+  .filters{grid-template-columns:repeat(2,minmax(0,1fr))}
+  form.grid{grid-template-columns:1fr}
+  /* حجم خط 16px في الحقول يمنع تكبير الصفحة التلقائي في iOS عند التركيز */
+  .filters input,.filters select,form.grid input,form.grid select,form.add-row input{font-size:16px}
+  th,td{padding:6px 8px;font-size:13px}
+  .table-scroll{max-height:60vh}
+  .breakdown{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .tabs{gap:4px}.tab{padding:8px 12px;font-size:12px}
+  .seg{display:flex;width:100%}
+  .seg-btn{flex:1;padding:8px 6px}
+  .action-bar{flex-direction:column;align-items:stretch}
+  .action-bar input[type=date]{font-size:16px}
+  .logo-row{flex-direction:column;align-items:stretch}
+  .logo-preview{width:100%}
+}
+
+/* ---------- الطباعة ----------
+   إصلاح «الأعمدة الكثيرة لا تظهر»: خط أصغر مع التفاف النص بدل قصّه،
+   والجداول تكسر الصفحات بأمان، والأعمدة غير المختارة (np) تُخفى، والتقارير عرضية. */
+@media print{
+  .sidebar,.no-print,button,#toasts,.view>h1{display:none!important}
+  .np{display:none!important}
+  .only-print{display:block}
+  .app{display:block}
+  .view{padding:0;overflow:visible}
+  body{background:#fff;font-size:11px}
+  .card{border:none;box-shadow:none;padding:0;margin-bottom:8px}
+  .table-scroll{max-height:none;overflow:visible;border:none}
+  .table-scroll table{width:100%;min-width:0}
+  .table-scroll thead th{position:static}
+  table{page-break-inside:auto}
+  tr{page-break-inside:avoid}
+  thead{display:table-header-group}   /* تكرار رأس الجدول على كل صفحة */
+  th,td{white-space:normal;word-break:break-word;font-size:9.5px;padding:3px 4px}
+  th{background:#e8edf3!important;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .badge{padding:0;background:none!important;color:#000!important;font-size:9.5px}
+  /* مؤشرات مصغّرة عند الطباعة: صفّ مضغوط بخط صغير يوفّر مساحة الصفحة */
+  .kpis{grid-template-columns:repeat(6,1fr);gap:4px}
+  .kpi{padding:3px 4px;box-shadow:none;border-color:#ccc}
+  .kpi .label{font-size:6.5px;line-height:1.2}
+  .kpi .val{font-size:9px;margin-top:1px}
+  .brand-head img{height:56px}
+  .brand-head{padding-bottom:6px;margin-bottom:8px}
+  .invoice-sheet h2,.print-title{font-size:14px;margin:4px 0 8px}
+  .hint{display:none}
+}

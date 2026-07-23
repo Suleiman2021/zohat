@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+
+# قواعد البيانات المحلية (لا تُرفع — البيانات الحقيقية على Railway Volume)
+*.db
+*.sqlite
+*.sqlite3
+backend/zohat.db
+
+# ملفات إكسل الأصلية (بيانات عمل قد تكون حسّاسة — لا تُرفع افتراضياً)
+*.xlsx
+
+# أسرار وبيئة
+.env
+.env.*
+*.local
+
+# محرّرات ونظام
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
