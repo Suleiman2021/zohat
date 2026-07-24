@@ -27,16 +27,28 @@ let PRINT_COLS={invoice:[], reports:[], customs:[]};
 const CUSTOMS_ST=["قيد الجمركة","تمّت الجمركة"];   // حالة محسوبة تلقائياً، ليست قائمة قابلة للتعديل
 const EXPORTED="تم التصدير";
 
-async function loadLists(){
+// يحمّل القوائم والإعدادات. مُحصَّن ضد فشل الشبكة: إن تعذّر أي نداء (خادم نائم مثلاً)
+// نُبقي القيم السابقة بدل إفراغ الواجهة، ونعيد المحاولة مرة واحدة تلقائياً.
+async function loadLists(retry=true){
   const [L, C, P] = await Promise.all([
-    API.get("/api/settings/lists"),
-    API.get("/api/settings/company").catch(()=>({phone:"",name:"",logo:""})),
-    API.get("/api/settings/print").catch(()=>({invoice:[],reports:[],customs:[]})),
+    API.get("/api/settings/lists").catch(()=>null),
+    API.get("/api/settings/company").catch(()=>null),
+    API.get("/api/settings/print").catch(()=>null),
   ]);
+  if(!L || !L.cities){                       // فشل تحميل القوائم الأساسية
+    if(retry){                                // محاولة ثانية بعد ثانيتين (إيقاظ الخادم)
+      await new Promise(r=>setTimeout(r,2000));
+      return loadLists(false);
+    }
+    if(!CITIES.length) toast("تعذّر تحميل القوائم — تحقّق من الاتصال ثم حدّث الصفحة", true);
+    return false;                             // نُبقي القيم الحالية كما هي
+  }
+  if(C) COMPANY=C;
+  if(P) PRINT_COLS=P;
   CITIES=L.cities||[]; PTYPES=L.parcel_types||[]; FINANCE=L.financing_types||[];
   PAY=L.payment_methods||[]; DELIVERY=L.delivery_statuses||[]; COLLECTION=L.collection_statuses||[];
   EXPORT_ST=L.export_statuses||["قيد التصدير","تم التصدير"]; EXPENSE_CATS=L.expense_categories||[];
-  COMPANY=C||COMPANY; PRINT_COLS=P||PRINT_COLS;
+  return true;
 }
 
 // ---- سجلّا أعمدة الفاتورة والتقارير: [المفتاح، العنوان، دالة القيمة] ----
@@ -167,7 +179,8 @@ async function showApp(){
     ? "مكتب فرع — "+API.branch : (ROLE_LABEL[API.role]||API.role);
   const tgl=$("#navToggle");
   if(tgl) tgl.onclick=()=>$(".sidebar").classList.toggle("open");
-  await loadLists();
+  // القائمة تُبنى دائماً حتى لو فشل تحميل القوائم — كي لا تختفي الواجهة أبداً
+  try{ await loadLists(); }catch(e){ console.warn("loadLists", e); }
   const nav=$("#nav"); nav.innerHTML="";
   (MENUS[API.role]||[]).forEach(k=>{
     const a=el("a",null,TITLES[k]); a.onclick=()=>route(k,a); nav.appendChild(a);

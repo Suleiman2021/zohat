@@ -67,6 +67,13 @@ def _backup_scheduler():
 @app.on_event("startup")
 def _startup():
     seed()
+    # تحذير مهم: بدون SECRET_KEY ثابت يتغيّر المفتاح عند كل إعادة تشغيل،
+    # فتنتهي جلسات كل المستخدمين فجأة ويُطلب منهم تسجيل الدخول من جديد.
+    if not os.getenv("SECRET_KEY"):
+        print("[!] تحذير: SECRET_KEY غير مضبوط — ستنتهي جلسات المستخدمين عند كل إعادة تشغيل. "
+              "اضبطه في متغيّرات البيئة (Railway → Variables).")
+    else:
+        print(f"[ok] SECRET_KEY مضبوط — مدة الجلسة {config.ACCESS_TOKEN_EXPIRE}")
     t = threading.Thread(target=_backup_scheduler, daemon=True)
     t.start()
 
