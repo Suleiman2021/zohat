@@ -77,7 +77,10 @@ class Shipment(SQLModel, table=True):
     customs_computed: bool = False  # يقابل ISNUMBER($M5) في الإكسل: تمّت الجمركة أم لا
     # الرسم العراقي للطن (تجاوز اختياري لقيمة الصنف) — الرسم الفعلي يُحسب = الوزن/1000 × هذا
     iraqi_per_ton: Optional[float] = None
-    two_party_expense: float = 0.0  # مصروف طرفين
+    # مصروف طرفين: المبلغ اليدوي لكامل الشحنة، و two_party_auto=True يعني الحقل فارغ
+    # فيُحسب تلقائياً من ثابت مصروف الطرفين للطن.
+    two_party_expense: float = 0.0
+    two_party_auto: bool = True
     extra_fees: float = 0.0         # أجور إضافية
     manual_tax_advance: Optional[float] = None   # تجاوز السلفة
     manual_consumption_fee: Optional[float] = None  # تجاوز رسم الإنفاق

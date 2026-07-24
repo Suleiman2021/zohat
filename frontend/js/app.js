@@ -440,8 +440,9 @@ function customsForm(sh, done){
       <p><b>الزبون (المستلِم):</b> ${sh.receiver_name} — <b>الصنف:</b> ${sh.item_name} —
          <b>الوزن:</b> ${sh.weight_kg} كغ — <b>قيمة البضاعة G:</b> ${money(sh.goods_value)}</p>
     <form class="grid" id="f">
-      <label>مصروف طرفين K ($)<input type="number" step="0.01" name="two_party_expense" value="${sh.two_party_expense||0}">
-        <small class="hint">قيمة يدوية لكامل وزن الشحنة</small></label>
+      <label>مصروف طرفين K ($)<input type="number" step="0.01" name="two_party_expense"
+          value="${sh.two_party_auto ? '' : (sh.two_party_expense ?? '')}" placeholder="اتركه فارغاً للحساب التلقائي">
+        <small class="hint">قيمة يدوية لكامل وزن الشحنة — إن تُرك فارغاً يُحسب تلقائياً من مصروف الطرفين للطن</small></label>
       <label>سلفة ضريبية يدوية N (تجاوز اختياري)<input type="number" step="0.01" name="manual_tax_advance" value="${sh.manual_tax_advance??''}"></label>
       <label>رسم إنفاق يدوي O (تجاوز اختياري)<input type="number" step="0.01" name="manual_consumption_fee" value="${sh.manual_consumption_fee??''}"></label>
       ${isCompany?`<label>نسبة العمولة (تجاوز اختياري)<input type="number" step="0.001" name="commission_rate" value="${sh.commission_rate??''}"></label>`:''}
@@ -454,8 +455,8 @@ function customsForm(sh, done){
   let timer=null;
   const preview=async()=>{
     const fd=Object.fromEntries(new FormData($("#f")));
-    fd.two_party_expense=Number(fd.two_party_expense||0);   // الأجور الإضافية تُدار من نموذج الشحنة
-    ["iraqi_per_ton","manual_tax_advance","manual_consumption_fee","commission_rate"].forEach(k=>{
+    // فارغ = null → يُحسب تلقائياً من ثابت الطن. الأجور الإضافية تُدار من نموذج الشحنة
+    ["two_party_expense","iraqi_per_ton","manual_tax_advance","manual_consumption_fee","commission_rate"].forEach(k=>{
       fd[k]=(fd[k]===""||fd[k]==null)?null:Number(fd[k]);
     });
     try{
@@ -466,8 +467,8 @@ function customsForm(sh, done){
   $("#f").addEventListener("input",()=>{ clearTimeout(timer); timer=setTimeout(preview,350); });
   $("#f").addEventListener("submit",async e=>{
     e.preventDefault(); const fd=Object.fromEntries(new FormData(e.target));
-    fd.two_party_expense=Number(fd.two_party_expense||0);   // الأجور الإضافية تُدار من نموذج الشحنة
-    ["iraqi_per_ton","manual_tax_advance","manual_consumption_fee","commission_rate"].forEach(k=>{
+    // فارغ = null → يُحسب تلقائياً من ثابت الطن. الأجور الإضافية تُدار من نموذج الشحنة
+    ["two_party_expense","iraqi_per_ton","manual_tax_advance","manual_consumption_fee","commission_rate"].forEach(k=>{
       fd[k]=(fd[k]===""||fd[k]==null)?null:Number(fd[k]);
     });
     try{
@@ -996,9 +997,8 @@ async function vPrintFx(){
         <label>مصروف الطرفين للطن الواحد ($ / 1000 كغ)
           <input id="twoPartyTon" type="number" step="0.01" dir="ltr" value="${calc.two_party_per_ton}"></label>
       </div>
-      <p class="hint">مصروف الطرفين حالياً <b>يدوي</b> يُدخَل لكامل وزن الشحنة من نموذج حساب الجمارك.
-        قيمة «للطن» أعلاه غير مستخدمة افتراضياً — لتفعيل الاحتساب التلقائي من الوزن غيّر معادلة
-        «مصروف طرفين» أدناه إلى: <code dir="ltr">(weight_kg / 1000) * two_party_per_ton</code></p>
+      <p class="hint">مصروف الطرفين: إن أُدخلت قيمة يدوية في نموذج حساب الجمارك تُعتمد كما هي لكامل الشحنة،
+        وإن تُرك الحقل <b>فارغاً</b> يُحسب تلقائياً = (الوزن ÷ 1000) × القيمة أعلاه.</p>
       <h3 class="sub">شرائح رسم الإنفاق الاستهلاكي (على الرسم السوري للطن الأصل)</h3>
       <div id="tiers"></div>
       <button class="sm" id="addTier">+ شريحة</button></div>

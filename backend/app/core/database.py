@@ -45,6 +45,7 @@ _MIGRATIONS = {
         ("goods_price", "FLOAT DEFAULT 0"),
         ("driver_name", "TEXT DEFAULT ''"),
         ("calc_version_id", "INTEGER"),
+        ("two_party_auto", "INTEGER DEFAULT 1"),
     ],
     "item": [
         ("iraqi_per_ton", "FLOAT DEFAULT 0"),
@@ -68,6 +69,10 @@ def _run_migrations():
             for name, ddl in cols:
                 if name not in existing:
                     conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {name} {ddl}'))
+                    # الشحنات القديمة التي فيها مصروف طرفين مُدخل تُعتبر «يدوية» لا تلقائية
+                    if table == "shipment" and name == "two_party_auto":
+                        conn.execute(text("UPDATE shipment SET two_party_auto = 0 "
+                                          "WHERE two_party_expense IS NOT NULL AND two_party_expense <> 0"))
         for table, drops in _DROP_COLUMNS.items():
             if table not in tables:
                 continue

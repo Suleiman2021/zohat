@@ -37,6 +37,22 @@ def _item_rates(db: Session, item_name: str) -> tuple[float, float]:
     return (it.syrian_per_ton, it.iraqi_per_ton) if it else (0.0, 0.0)
 
 
+def _apply_two_party(patch: dict) -> dict:
+    """يحوّل مصروف الطرفين إلى (مبلغ + علم تلقائي):
+    فارغ/None → تلقائي من ثابت الطن، وأي رقم (حتى 0) → يدوي يُعتمد كما هو."""
+    if "two_party_expense" not in patch:
+        return patch
+    patch = dict(patch)
+    val = patch.pop("two_party_expense")
+    if val is None or val == "":
+        patch["two_party_expense"] = 0.0
+        patch["two_party_auto"] = True
+    else:
+        patch["two_party_expense"] = float(val)
+        patch["two_party_auto"] = False
+    return patch
+
+
 def _fill_item_code(db: Session, sh: Shipment):
     """يملأ الكود الجمركي من قاعدة الأصناف إن كان فارغاً (يبقى قابلاً لتعديل المخلص)."""
     if not sh.item_code and sh.item_name:
@@ -130,6 +146,7 @@ def create_shipment(sh: Shipment, db: Session = Depends(get_session),
     sh.customs_computed = False
     sh.iraqi_per_ton = None
     sh.two_party_expense = 0.0
+    sh.two_party_auto = True      # فارغ → يُحسب تلقائياً حتى تُدخل قيمة يدوية في الجمارك
     # الأجور الإضافية تُدخَل من نموذج الشحنة نفسه (لا تُصفَّر هنا)
     sh.manual_tax_advance = None
     sh.manual_consumption_fee = None
@@ -181,7 +198,9 @@ def preview_customs(sid: int, patch: dict, db: Session = Depends(get_session),
     sh = db.get(Shipment, sid)
     if not sh:
         raise HTTPException(404, "الشحنة غير موجودة")
-    patch = {k: v for k, v in patch.items() if k in (CUSTOMS_FIELDS - {"customs_computed"})}
+    patch = _apply_two_party(patch)
+    allowed = (CUSTOMS_FIELDS - {"customs_computed"}) | {"two_party_auto"}
+    patch = {k: v for k, v in patch.items() if k in allowed}
     temp = sh.model_copy(update=patch)
     syr, irq = _item_rates(db, temp.item_name)
     return compute(temp, syr, irq, calc_cfg(db))
@@ -194,7 +213,8 @@ def compute_customs(sid: int, patch: dict, db: Session = Depends(get_session),
     sh = db.get(Shipment, sid)
     if not sh:
         raise HTTPException(404, "الشحنة غير موجودة")
-    for k in CUSTOMS_FIELDS - {"customs_computed"}:
+    patch = _apply_two_party(patch)
+    for k in (CUSTOMS_FIELDS - {"customs_computed"}) | {"two_party_auto"}:
         if k in patch:
             setattr(sh, k, patch[k])
     sh.customs_computed = True

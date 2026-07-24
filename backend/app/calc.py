@@ -57,8 +57,9 @@ FORMULA_SPECS = [
      "الوزن بالطن × الرسم العراقي للطن (من الصنف أو تجاوز يدوي في نموذج الجمارك)",
      "(weight_kg / 1000) * iraqi_per_ton"),
     ("two_party_expense", "مصروف طرفين", "حساب الجمارك!K5",
-     "قيمة يدوية لكامل وزن الشحنة كما تُدخَل في نموذج حساب الجمارك (لا تُحسب من الطن)",
-     "two_party_expense_input"),
+     "إن أُدخلت قيمة يدوية في نموذج الجمارك تُعتمد كما هي لكامل الشحنة، "
+     "وإن تُرك الحقل فارغاً يُحسب تلقائياً = (الوزن ÷ 1000) × مصروف الطرفين للطن",
+     "two_party_expense_input if two_party_manual else (weight_kg / 1000) * two_party_per_ton"),
     ("duties_only", "الرسوم (بند الفاتورة)", "صفحة الزبون",
      "الرسم السوري الفعلي + الرسم العراقي الفعلي + مصروف طرفين",
      "syrian_actual + iraqi_actual + two_party_expense"),
@@ -97,7 +98,8 @@ VARIABLE_DOCS = [
     ("goods_value", "قيمة الفاتورة (دولار) — تدخل في السلفة الضريبية ورسم الإنفاق فقط"),
     ("goods_price", "ثمن البضاعة (دولار) — يدخل في العمولة ورأس المال عند الشراء نيابةً عن الزبون"),
     ("two_party_per_ton", "مصروف الطرفين للطن الواحد (من الإعدادات)"),
-    ("two_party_expense_input", "مصروف الطرفين المُدخل يدوياً (يُستخدم فقط إن كان مصروف الطن = 0)"),
+    ("two_party_expense_input", "مصروف الطرفين المُدخل يدوياً في نموذج الجمارك"),
+    ("two_party_manual", "هل أُدخل مصروف الطرفين يدوياً؟ (True/False) — False يعني الحقل فارغ"),
     ("extra_fees", "أجور إضافية (دولار)"),
     ("tax_advance_rate", "نسبة السلفة الضريبية (افتراضي 0.02)"),
     ("commission_rate", "نسبة العمولة (يدوية للشحنة أو الافتراضية 0.05)"),
@@ -229,6 +231,7 @@ def current_version(db) -> tuple[int, dict]:
 _SUPERSEDED = {
     "two_party_expense": [
         "(weight_kg / 1000) * two_party_per_ton if two_party_per_ton > 0 else two_party_expense_input",
+        "two_party_expense_input",
     ],
 }
 
@@ -285,7 +288,8 @@ def cfg_resolver(db):
 def _sample_vars() -> dict:
     return {"weight_kg": 100.0, "syrian_per_ton": 300.0, "iraqi_per_ton": 120.0,
             "goods_value": 1000.0, "goods_price": 800.0,
-            "two_party_per_ton": 10.0, "two_party_expense_input": 10.0, "extra_fees": 5.0,
+            "two_party_per_ton": 10.0, "two_party_expense_input": 10.0,
+            "two_party_manual": True, "extra_fees": 5.0,
             "tax_advance_rate": 0.02, "commission_rate": 0.05, "consumption_rate": 0.02,
             "is_company": True, "fees_payment": COD, "financing": COMPANY,
             "collection_status": COLLECTED, "delivery_status": DELIVERED}
@@ -356,9 +360,10 @@ def compute(sh, syrian_per_ton: float, iraqi_per_ton: float = 0.0,
         "iraqi_per_ton": eff_iraqi_per_ton,
         "goods_value": sh.goods_value or 0.0,
         "goods_price": sh.goods_price or 0.0,
-        # مصروف الطرفين: يُحسب من الوزن × مصروف الطن، والمُدخل اليدوي احتياطي
+        # مصروف الطرفين: المُدخل اليدوي له الأولوية، وإن تُرك فارغاً (None) يُحسب من ثابت الطن
         "two_party_per_ton": cfg.get("two_party_per_ton", 0.0),
         "two_party_expense_input": sh.two_party_expense or 0.0,
+        "two_party_manual": not getattr(sh, "two_party_auto", True),
         "extra_fees": sh.extra_fees or 0.0,
         "tax_advance_rate": cfg["tax_advance_rate"],
         "commission_rate": crate,
