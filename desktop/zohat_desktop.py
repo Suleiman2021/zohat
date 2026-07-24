@@ -13,7 +13,7 @@ APP_TITLE = "زوهات — نظام الشحن والتخليص"
 
 # ضع رابط Railway هنا قبل البناء ليصل البرنامج جاهزاً للموظفين (اختياري).
 # إن تُرك فارغاً سيطلبه البرنامج من المستخدم عند أول تشغيل ويحفظه.
-DEFAULT_URL = ""
+DEFAULT_URL = "https://web-production-6fc30.up.railway.app/"
 
 
 def _app_dir() -> Path:
