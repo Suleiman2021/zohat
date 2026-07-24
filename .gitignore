@@ -26,3 +26,9 @@ backend/zohat.db
 .idea/
 .DS_Store
 Thumbs.db
+
+# مخرجات بناء برنامج سطح المكتب
+desktop/build/
+desktop/dist/
+desktop/*.spec
+desktop/.venv/
