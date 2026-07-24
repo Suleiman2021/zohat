@@ -3,7 +3,7 @@ from sqlmodel import Session, select
 from typing import Optional
 
 from ..core.database import get_session
-from ..core.security import admin_or_accountant, current_user
+from ..core.security import admin_or_accountant
 from ..models import User, Shipment, Item, JournalEntry, _as_date
 from ..calc import compute, calc_cfg, cfg_resolver, compute_summary, COMPANY, COLLECTED
 

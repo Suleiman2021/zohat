@@ -9,7 +9,7 @@ from ..core.security import admin_only, any_role
 from ..models import User, ListItem, Setting
 from ..calc import (FORMULA_SPECS, VARIABLE_DOCS, DEFAULT_FORMULAS,
                     SUMMARY_FORMULA_SPECS, SUMMARY_VARIABLE_DOCS, DEFAULT_SUMMARY_FORMULAS,
-                    default_calc_cfg, calc_cfg, save_version,
+                    calc_cfg, save_version,
                     validate_formula, validate_summary_formula)
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])

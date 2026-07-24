@@ -236,9 +236,17 @@ _SUPERSEDED = {
 }
 
 
+# رقم دفعة الترقية — زِدْه عند إضافة معادلات جديدة إلى _SUPERSEDED
+_UPGRADE_MARK = "calc_upgrade_applied_v2"
+
+
 def upgrade_superseded_formulas(db) -> bool:
     """يستبدل المعادلات المُلغاة في النسخة السارية بالافتراضي الجديد (نسخة جديدة).
-    لا يمسّ أي معادلة عدّلها المستخدم يدوياً — يطابق النص القديم حرفياً فقط."""
+    يعمل **مرة واحدة فقط** (يُعلَّم في الإعدادات) حتى لا يطغى على اختيار المستخدم
+    إن أعاد ضبط المعادلة يدوياً إلى صيغة قديمة عن قصد."""
+    from .models import Setting
+    if db.get(Setting, _UPGRADE_MARK):
+        return False
     ver_id, cfg = current_version(db)
     changed = False
     for key, old_exprs in _SUPERSEDED.items():
@@ -247,6 +255,8 @@ def upgrade_superseded_formulas(db) -> bool:
             changed = True
     if changed:
         save_version(db, cfg, "system-upgrade")
+    db.add(Setting(key=_UPGRADE_MARK, value="1"))
+    db.commit()
     return changed
 
 

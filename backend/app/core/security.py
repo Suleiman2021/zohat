@@ -1,6 +1,5 @@
 """المصادقة والصلاحيات (JWT + RBAC)."""
 from datetime import datetime
-from typing import Optional
 import jwt
 import bcrypt
 from fastapi import Depends, HTTPException, status
@@ -10,7 +9,7 @@ from sqlmodel import Session, select
 from .config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE
 from .database import get_session
 from ..models import (User, ROLE_ADMIN, ROLE_SUPERVISOR, ROLE_ACCOUNTANT,
-                      ROLE_COLLECTOR, ROLE_BROKER, ROLE_BRANCH, ALL_ROLES)
+                      ROLE_COLLECTOR, ROLE_BRANCH, ALL_ROLES)
 
 oauth2 = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 

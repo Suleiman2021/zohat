@@ -3,9 +3,9 @@ from sqlmodel import Session, select
 from typing import Optional
 
 from ..core.database import get_session
-from ..core.security import (current_user, any_role, admin_or_accountant,
+from ..core.security import (any_role, admin_or_accountant,
                              admin_or_supervisor, can_register)
-from ..models import (User, Shipment, Item, ROLE_BRANCH, ROLE_ADMIN, ROLE_BROKER,
+from ..models import (User, Shipment, Item, ROLE_BRANCH, ROLE_BROKER,
                       ROLE_COLLECTOR, ROLE_ACCOUNTANT, _as_date)
 from ..calc import compute, calc_cfg, cfg_resolver
 
