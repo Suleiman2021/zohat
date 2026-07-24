@@ -370,7 +370,7 @@ def compute(sh, syrian_per_ton: float, iraqi_per_ton: float = 0.0,
         "iraqi_per_ton": eff_iraqi_per_ton,
         "goods_value": sh.goods_value or 0.0,
         "goods_price": sh.goods_price or 0.0,
-        # مصروف الطرفين: المُدخل اليدوي له الأولوية، وإن تُرك فارغاً (None) يُحسب من ثابت الطن
+        # مصروف الطرفين: المُدخل اليدوي له الأولوية، وإن تُرك فارغاً (two_party_auto) يُحسب من ثابت الطن
         "two_party_per_ton": cfg.get("two_party_per_ton", 0.0),
         "two_party_expense_input": sh.two_party_expense or 0.0,
         "two_party_manual": not getattr(sh, "two_party_auto", True),
