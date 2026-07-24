@@ -57,8 +57,8 @@ FORMULA_SPECS = [
      "الوزن بالطن × الرسم العراقي للطن (من الصنف أو تجاوز يدوي في نموذج الجمارك)",
      "(weight_kg / 1000) * iraqi_per_ton"),
     ("two_party_expense", "مصروف طرفين", "حساب الجمارك!K5",
-     "الوزن بالطن × مصروف الطرفين للطن. إذا كان مصروف الطرفين للطن = 0 يُستخدم المبلغ اليدوي المُدخل",
-     "(weight_kg / 1000) * two_party_per_ton if two_party_per_ton > 0 else two_party_expense_input"),
+     "قيمة يدوية لكامل وزن الشحنة كما تُدخَل في نموذج حساب الجمارك (لا تُحسب من الطن)",
+     "two_party_expense_input"),
     ("duties_only", "الرسوم (بند الفاتورة)", "صفحة الزبون",
      "الرسم السوري الفعلي + الرسم العراقي الفعلي + مصروف طرفين",
      "syrian_actual + iraqi_actual + two_party_expense"),
@@ -225,6 +225,28 @@ def current_version(db) -> tuple[int, dict]:
     return row.id, cfg
 
 
+# معادلات قديمة استُبدلت بقرار تشغيلي — تُرقَّى تلقائياً إلى الافتراضي الجديد
+_SUPERSEDED = {
+    "two_party_expense": [
+        "(weight_kg / 1000) * two_party_per_ton if two_party_per_ton > 0 else two_party_expense_input",
+    ],
+}
+
+
+def upgrade_superseded_formulas(db) -> bool:
+    """يستبدل المعادلات المُلغاة في النسخة السارية بالافتراضي الجديد (نسخة جديدة).
+    لا يمسّ أي معادلة عدّلها المستخدم يدوياً — يطابق النص القديم حرفياً فقط."""
+    ver_id, cfg = current_version(db)
+    changed = False
+    for key, old_exprs in _SUPERSEDED.items():
+        if cfg["formulas"].get(key) in old_exprs:
+            cfg["formulas"][key] = DEFAULT_FORMULAS[key]
+            changed = True
+    if changed:
+        save_version(db, cfg, "system-upgrade")
+    return changed
+
+
 def save_version(db, cfg: dict, username: str = "") -> int:
     """يحفظ نسخة جديدة — تسري على الشحنات الجديدة فقط."""
     from .models import CalcVersion
@@ -373,6 +395,7 @@ def compute(sh, syrian_per_ton: float, iraqi_per_ton: float = 0.0,
     out.update({
         "syrian_per_ton": round(eff_syrian_per_ton, 2),
         "iraqi_per_ton": round(eff_iraqi_per_ton, 2),
+        "extra_fees": round(v["extra_fees"], 2),   # مُدخل لا معادلة — يُعاد للمعاينة
         "consumption_rate": v["consumption_rate"],
         "customs_status": customs_status,
         "alert": alert,

@@ -47,6 +47,10 @@ def seed():
                         hashed_password=hash_pw(os.getenv("ADMIN_PASSWORD", "admin123"))))
             db.commit()
         settings.seed_lists(db)
+        # ترقية المعادلات المُلغاة (مثل احتساب مصروف الطرفين من الطن) إلى الافتراضي الجديد
+        from .calc import upgrade_superseded_formulas
+        if upgrade_superseded_formulas(db):
+            print("[ok] تمت ترقية معادلة مصروف الطرفين إلى الإدخال اليدوي")
 
 
 def _backup_scheduler():

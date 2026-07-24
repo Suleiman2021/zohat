@@ -12,7 +12,8 @@ from ..calc import compute, calc_cfg, cfg_resolver
 router = APIRouter(prefix="/api/shipments", tags=["shipments"])
 
 # حقول تخصّ خطوة «حساب الجمارك» فقط — لا يجوز لدور الفرع تعديلها
-CUSTOMS_FIELDS = {"iraqi_per_ton", "two_party_expense", "extra_fees",
+# (الأجور الإضافية خرجت منها: صارت حقلاً عادياً في نموذج الشحنة)
+CUSTOMS_FIELDS = {"iraqi_per_ton", "two_party_expense",
                   "manual_tax_advance", "manual_consumption_fee",
                   "commission_rate", "customs_computed"}
 
@@ -129,7 +130,7 @@ def create_shipment(sh: Shipment, db: Session = Depends(get_session),
     sh.customs_computed = False
     sh.iraqi_per_ton = None
     sh.two_party_expense = 0.0
-    sh.extra_fees = 0.0
+    # الأجور الإضافية تُدخَل من نموذج الشحنة نفسه (لا تُصفَّر هنا)
     sh.manual_tax_advance = None
     sh.manual_consumption_fee = None
     sh.export_status = "قيد التصدير"

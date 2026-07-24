@@ -424,10 +424,13 @@ function breakdownCells(c){
     + cell("السلفة الضريبية H", money(c.tax_advance))
     + cell("نسبة الإنفاق الاستهلاكي I", (c.consumption_rate*100).toFixed(0)+"%")
     + cell("رسم الإنفاق الاستهلاكي J", money(c.consumption_fee))
-    + cell("المجموع النهائي M (أجور الشحن والجمركة)", money(c.fees_total));
+    + cell("مصروف طرفين K (للشحنة كاملة)", money(c.two_party_expense))
+    + cell("الأجور الإضافية L", money(c.extra_fees));
   if(c.commission || c.invested_capital){
     html += cell("عمولة الشراء", money(c.commission)) + cell("رأس مال مستثمر", money(c.invested_capital));
   }
+  // المجموع النهائي دائماً آخر كرت
+  html += cell("المجموع النهائي M (أجور الشحن والجمركة)", money(c.fees_total));
   return html;
 }
 function customsForm(sh, done){
@@ -438,8 +441,7 @@ function customsForm(sh, done){
          <b>الوزن:</b> ${sh.weight_kg} كغ — <b>قيمة البضاعة G:</b> ${money(sh.goods_value)}</p>
     <form class="grid" id="f">
       <label>مصروف طرفين K ($)<input type="number" step="0.01" name="two_party_expense" value="${sh.two_party_expense||0}">
-        <small class="hint">يُحسب تلقائياً من الوزن إذا حُدِّد «مصروف الطرفين للطن» في صفحة المعادلات</small></label>
-      <label>أجور إضافية L ($)<input type="number" step="0.01" name="extra_fees" value="${sh.extra_fees||0}"></label>
+        <small class="hint">قيمة يدوية لكامل وزن الشحنة</small></label>
       <label>سلفة ضريبية يدوية N (تجاوز اختياري)<input type="number" step="0.01" name="manual_tax_advance" value="${sh.manual_tax_advance??''}"></label>
       <label>رسم إنفاق يدوي O (تجاوز اختياري)<input type="number" step="0.01" name="manual_consumption_fee" value="${sh.manual_consumption_fee??''}"></label>
       ${isCompany?`<label>نسبة العمولة (تجاوز اختياري)<input type="number" step="0.001" name="commission_rate" value="${sh.commission_rate??''}"></label>`:''}
@@ -452,7 +454,7 @@ function customsForm(sh, done){
   let timer=null;
   const preview=async()=>{
     const fd=Object.fromEntries(new FormData($("#f")));
-    ["two_party_expense","extra_fees"].forEach(k=>fd[k]=Number(fd[k]||0));
+    fd.two_party_expense=Number(fd.two_party_expense||0);   // الأجور الإضافية تُدار من نموذج الشحنة
     ["iraqi_per_ton","manual_tax_advance","manual_consumption_fee","commission_rate"].forEach(k=>{
       fd[k]=(fd[k]===""||fd[k]==null)?null:Number(fd[k]);
     });
@@ -464,7 +466,7 @@ function customsForm(sh, done){
   $("#f").addEventListener("input",()=>{ clearTimeout(timer); timer=setTimeout(preview,350); });
   $("#f").addEventListener("submit",async e=>{
     e.preventDefault(); const fd=Object.fromEntries(new FormData(e.target));
-    ["two_party_expense","extra_fees"].forEach(k=>fd[k]=Number(fd[k]||0));
+    fd.two_party_expense=Number(fd.two_party_expense||0);   // الأجور الإضافية تُدار من نموذج الشحنة
     ["iraqi_per_ton","manual_tax_advance","manual_consumption_fee","commission_rate"].forEach(k=>{
       fd[k]=(fd[k]===""||fd[k]==null)?null:Number(fd[k]);
     });
@@ -782,7 +784,7 @@ async function renderJournal(box, filters){
   load();
 }
 
-// ---------- الأصناف (إدارة + استيراد CSV/Excel) ----------
+// ---------- الأصناف (إدارة + استيراد Excel) ----------
 const escAttr = s => String(s??"").replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;");
 async function vItems(){
   const v=$("#view"); let currentItems=[];
@@ -792,11 +794,9 @@ async function vItems(){
      <label>الرسم السوري للطن<input type="number" step="0.01" name="syrian_per_ton"></label>
      <label>الرسم العراقي للطن<input type="number" step="0.01" name="iraqi_per_ton"></label>
      <button class="primary">إضافة</button></form></div>
-   <div class="card"><h3>استيراد ملف قاعدة البيانات (Excel/CSV)</h3>
+   <div class="card"><h3>استيراد ملف قاعدة البيانات (Excel)</h3>
      <p class="hint">ارفع ملف .xlsx الأصلي (ورقة «قاعدة البيانات») — يُدرَج الجديد ويُحدَّث الموجود بالاسم. تُقرأ الأعمدة: الكود، الصنف، الرسم السوري للطن، وأي عمود يحوي «عراقي» كرسم عراقي للطن.</p>
-     <input type="file" id="xlsx" accept=".xlsx">
-     <span class="hint">أو ملف CSV برأس: code,name,syrian_per_ton,iraqi_per_ton</span>
-     <input type="file" id="csv" accept=".csv"><span id="impmsg"></span></div>
+     <input type="file" id="xlsx" accept=".xlsx"><span id="impmsg"></span></div>
    <div class="card"><label>بحث<input id="q" placeholder="اسم الصنف"></label><div id="il"></div></div>`;
   const load=async(q="")=>{const its=await API.get("/api/items",{q, limit:2000}); currentItems=its;
     $("#il").innerHTML=wrapTable(`<table><thead><tr><th>الكود</th><th>الصنف</th><th>الرسم السوري/طن</th><th>الرسم العراقي/طن</th><th>عدد الأصناف: ${its.length}</th></tr></thead>
@@ -838,19 +838,6 @@ async function vItems(){
     try{ await API.post("/api/items",fd); toast("تمت إضافة الصنف"); e.target.reset(); load(); }
     catch(err){ toast(err.message, true); }});
   $("#q").addEventListener("input",e=>load(e.target.value));
-  $("#csv").addEventListener("change",async e=>{
-    const file=e.target.files[0]; if(!file) return;
-    const text=await file.text();
-    const lines=text.split(/\r?\n/).filter(l=>l.trim().length);
-    const header=lines.shift().split(",").map(h=>h.trim().toLowerCase());
-    const rows=lines.map(line=>{
-      const cells=line.split(",").map(c=>c.trim());
-      const obj={}; header.forEach((h,i)=>obj[h]=cells[i]); return obj;
-    });
-    const res=await API.post("/api/items/bulk", rows);
-    $("#impmsg").textContent=` تمّت إضافة ${res.added} وتحديث ${res.updated}.`;
-    load();
-  });
   $("#xlsx").addEventListener("change",async e=>{
     const file=e.target.files[0]; if(!file) return;
     $("#impmsg").textContent=" جارٍ الاستيراد...";
@@ -1009,8 +996,9 @@ async function vPrintFx(){
         <label>مصروف الطرفين للطن الواحد ($ / 1000 كغ)
           <input id="twoPartyTon" type="number" step="0.01" dir="ltr" value="${calc.two_party_per_ton}"></label>
       </div>
-      <p class="hint">عند تحديد مصروف الطرفين للطن يُحسب مصروف الطرفين تلقائياً = (الوزن ÷ 1000) × هذه القيمة.
-        إذا تركته صفراً يبقى المبلغ المُدخل يدوياً في نموذج الجمارك.</p>
+      <p class="hint">مصروف الطرفين حالياً <b>يدوي</b> يُدخَل لكامل وزن الشحنة من نموذج حساب الجمارك.
+        قيمة «للطن» أعلاه غير مستخدمة افتراضياً — لتفعيل الاحتساب التلقائي من الوزن غيّر معادلة
+        «مصروف طرفين» أدناه إلى: <code dir="ltr">(weight_kg / 1000) * two_party_per_ton</code></p>
       <h3 class="sub">شرائح رسم الإنفاق الاستهلاكي (على الرسم السوري للطن الأصل)</h3>
       <div id="tiers"></div>
       <button class="sm" id="addTier">+ شريحة</button></div>
