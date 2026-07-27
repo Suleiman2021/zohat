@@ -41,15 +41,16 @@ button.primary.gold:hover{background:#b8931f}
 /* حقل كلمة المرور مع زر الإظهار/الإخفاء (أيقونة خطّية متناسقة مع هوية النظام) */
 .pw-wrap{position:relative;display:flex}
 .pw-wrap input{width:100%;padding-inline-end:48px!important}
-.pw-eye{position:absolute;inset-inline-end:5px;top:50%;transform:translateY(-50%);
-  background:transparent;border:0;cursor:pointer;padding:0;
-  width:38px;height:38px;border-radius:9px;color:var(--muted);
-  display:grid;place-items:center;transition:color .15s,background .15s}
+/* زر بلا خلفية إطلاقاً — الأيقونة وحدها هي الزر */
+.pw-eye{position:absolute;inset-inline-end:8px;top:50%;transform:translateY(-50%);
+  background:none;border:0;box-shadow:none;cursor:pointer;padding:0;
+  width:30px;height:30px;color:var(--muted);
+  display:grid;place-items:center;transition:color .15s,transform .1s}
 .pw-eye svg{width:21px;height:21px;display:block}
-.pw-eye:hover{color:var(--dteal);background:rgba(0,156,180,.09)}
-.pw-eye.on{color:var(--teal)}
-.pw-eye:active{transform:translateY(-50%) scale(.94)}
-.pw-eye:focus-visible{outline:2px solid var(--teal);outline-offset:1px}
+.pw-eye svg[hidden]{display:none}
+.pw-eye:hover,.pw-eye:focus-visible{background:none;color:var(--teal)}
+.pw-eye:active{transform:translateY(-50%) scale(.9);background:none}
+.pw-eye:focus-visible{outline:2px solid var(--teal);outline-offset:3px;border-radius:6px}
 
 /* ---------- هيكل التطبيق ---------- */
 .app{display:grid;grid-template-columns:240px minmax(0,1fr);min-height:100vh;min-height:100dvh}

@@ -183,15 +183,15 @@ $("#loginForm").addEventListener("submit",async e=>{
 });
 $("#logout").addEventListener("click",()=>{API.clear();location.reload();});
 
-// إظهار/إخفاء كلمة المرور — أيقونة عين خطّية تُشطب عند الإظهار
+// إظهار/إخفاء كلمة المرور — تبديل بين أيقونتَي عين مفتوحة/مشطوبة
 (()=>{
-  const t=$("#pwToggle"), pw=$("#pw"), slash=$("#pwEyeSlash");
+  const t=$("#pwToggle"), pw=$("#pw"), icShow=$("#pwIconShow"), icHide=$("#pwIconHide");
   if(!t||!pw) return;
   t.onclick=()=>{
-    const show = pw.type==="password";
+    const show = pw.type==="password";          // سنُظهر الكلمة الآن؟
     pw.type = show ? "text" : "password";
-    if(slash) slash.style.display = show ? "" : "none";
-    t.classList.toggle("on", show);
+    if(icShow) icShow.hidden = show;            // المفتوحة تختفي عند الإظهار
+    if(icHide) icHide.hidden = !show;           // والمشطوبة تظهر مكانها
     const label = show ? "إخفاء كلمة المرور" : "إظهار كلمة المرور";
     t.setAttribute("aria-label", label); t.title = label;
     pw.focus();
