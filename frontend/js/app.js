@@ -183,24 +183,6 @@ $("#loginForm").addEventListener("submit",async e=>{
 });
 $("#logout").addEventListener("click",()=>{API.clear();location.reload();});
 
-// إظهار/إخفاء كلمة المرور — 👁 حين تكون مخفيّة، و🙈 حين تكون ظاهرة.
-// يُكتب الرمز من هنا كي يعمل حتى لو بقيت نسخة HTML قديمة في المتصفح.
-(()=>{
-  const t=$("#pwToggle"), pw=$("#pw");
-  if(!t||!pw) return;
-  const paint=show=>{
-    t.textContent = show ? "🙈" : "👁";
-    const label = show ? "إخفاء كلمة المرور" : "إظهار كلمة المرور";
-    t.setAttribute("aria-label", label); t.title = label;
-  };
-  paint(false);
-  t.onclick=()=>{
-    const show = pw.type==="password";           // سنُظهر الكلمة الآن؟
-    pw.type = show ? "text" : "password";
-    paint(show);
-    pw.focus();
-  };
-})();
 
 async function showApp(){
   $("#login").classList.add("hidden"); $("#app").classList.remove("hidden");
