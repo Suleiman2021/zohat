@@ -176,6 +176,20 @@ $("#loginForm").addEventListener("submit",async e=>{
 });
 $("#logout").addEventListener("click",()=>{API.clear();location.reload();});
 
+// إظهار/إخفاء كلمة المرور في شاشة الدخول
+(()=>{
+  const t=$("#pwToggle"), pw=$("#pw");
+  if(!t||!pw) return;
+  t.onclick=()=>{
+    const show = pw.type==="password";
+    pw.type = show ? "text" : "password";
+    t.textContent = show ? "🙈" : "👁";
+    const label = show ? "إخفاء كلمة المرور" : "إظهار كلمة المرور";
+    t.setAttribute("aria-label", label); t.title = label;
+    pw.focus();
+  };
+})();
+
 async function showApp(){
   $("#login").classList.add("hidden"); $("#app").classList.remove("hidden");
   $("#userName").textContent=API.name||"مستخدم";
@@ -760,7 +774,7 @@ async function vAccounting(){
     <div class="tabs" id="atabs"></div>
     <div id="atab"></div>`;
   const TABS=[["summary","الملخّص"],["journal","دفتر القيود"],["purchases","مشتريات نيابةً"],
-    ["branches","مقارنة الفروع"],["receivables","الذمم حسب المكتب"],["alerts","التنبيهات"]];
+    ["branches","مقارنة الفروع"],["receivables","الذمم (المكاتب والآجل)"],["alerts","التنبيهات"]];
   let cur="summary", data=null;
   const filters=()=>({date_from:$("#af").value,date_to:$("#at").value,branch:$("#ab").value});
   const renderTabs=()=>{
@@ -775,9 +789,7 @@ async function vAccounting(){
     else if(cur==="branches") box.innerHTML=accTableHtml(
       ["المدينة","الوارد","المصاريف","الصافي"], data.branch_comparison,
       r=>[r.city, money(r.revenue), money(r.expenses), money(r.net)]);
-    else if(cur==="receivables") box.innerHTML=accTableHtml(
-      ["المكتب","المستحق ضد الدفع","المحصَّل فعلياً","المتبقي"], data.receivables_by_office,
-      r=>[r.city, money(r.cod_due), money(r.collected), money(r.remaining)]);
+    else if(cur==="receivables") box.innerHTML=accReceivablesHtml(data);
     else if(cur==="alerts") box.innerHTML=accTableHtml(
       ["القيد","الزبون (المستلِم)","التنبيه"], data.alerts, r=>[r.ref_no, r.customer, r.message]);
   };
@@ -792,7 +804,8 @@ function accSummaryHtml(s){
   const K=[["الإيرادات",s.revenue,""],["المصاريف التشغيلية",s.opex,"cod"],
     ["مشتريات (مدفوع)",s.invested,"gold"],["إجمالي المدفوعات",s.total_payments,"cod"],
     ["صافي الربح التشغيلي",s.operating_net,"gold"],["صافي التدفق النقدي",s.cash_net,""],
-    ["النقد المحصَّل",s.cash_collected,"cash"],["الذمم المدينة",s.receivables,"cod"],
+    ["النقد المحصَّل",s.cash_collected,"cash"],["ذمم مكاتب الوجهة",s.receivables,"cod"],
+    ["ذمم آجلة (على المرسلين)",s.sender_debt,"cod"],["إجمالي الذمم المدينة",s.total_receivables,"gold"],
     ["المسترد من المشتريات",s.recovered,""],["لم يُسترد بعد",s.not_recovered,"cod"]];
   const kpis=K.map(([l,val,c])=>`<div class="kpi ${c}"><div class="label">${l}</div><div class="val">${money(val)}</div></div>`).join("");
   const cats=wrapTable(`<table><thead><tr><th>البند</th><th>المبلغ</th></tr></thead><tbody>${
@@ -804,11 +817,40 @@ function accTableHtml(headers, rows, mapRow){
   return `<div class="card">${wrapTable(`<table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join("")}</tr></thead>
     <tbody>${rows.map(r=>`<tr>${mapRow(r).map(c=>`<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table>`)}</div>`;
 }
+// الذمم: على مكاتب الوجهة (ضد الدفع) + على المرسلين (آجل) — جهتان مختلفتان
+function accReceivablesHtml(s){
+  const office = accTableHtml(
+    ["المكتب","المستحق ضد الدفع","المحصَّل فعلياً","المتبقي"], s.receivables_by_office,
+    r=>[r.city, money(r.cod_due), money(r.collected), money(r.remaining)]);
+  const sender = accTableHtml(
+    ["المرسِل (صاحب الذمة)","عدد الشحنات","أرقام القيود","المبلغ الآجل"],
+    s.deferred_by_sender,
+    r=>[`<b>${r.sender}</b>`, r.count, `<span class="mini">${r.refs}</span>`, money(r.amount)]);
+  const totals = `<div class="kpis" style="margin-bottom:14px">
+      <div class="kpi cod"><div class="label">ذمم على مكاتب الوجهة</div>
+        <div class="val">${money(s.receivables)}</div></div>
+      <div class="kpi cod"><div class="label">ذمم آجلة على المرسلين</div>
+        <div class="val">${money(s.deferred_total)}</div></div>
+      <div class="kpi gold"><div class="label">إجمالي الذمم المدينة</div>
+        <div class="val">${money(s.total_receivables)}</div></div>
+    </div>`;
+  return `${totals}
+    <h3 class="sub">أولاً: الذمم حسب مكتب الوجهة (ضد الدفع)</h3>${office}
+    <h3 class="sub">ثانياً: الذمم الآجلة — على المرسِل لا على المكتب</h3>
+    <p class="hint">شحنات حالتها «آجل»: المبلغ دَين على المرسِل نفسه، ولا يُحمَّل على مكتب الوجهة.</p>
+    ${sender}`;
+}
 function accPurchasesHtml(s){
+  // عمود المرسِل يوضّح مَن تُطالَب منه الذمة عندما تكون حالة التحصيل «آجل»
   const detail = accTableHtml(
-    ["القيد","التاريخ","الزبون (المستلِم)","من قام بالشراء","المبلغ","العمولة","حالة التحصيل","الوجهة"],
-    s.purchases_detail, r=>[r.ref_no, r.ship_date, r.customer, r.bought_by||"-", money(r.amount),
-                            money(r.commission), r.collection_status, r.destination]);
+    ["القيد","التاريخ","الزبون (المستلِم)","المرسِل (المُطالَب عند آجل)","من قام بالشراء",
+     "المبلغ","العمولة","حالة التحصيل","ذمة آجلة","الوجهة"],
+    s.purchases_detail, r=>[r.ref_no, r.ship_date, r.customer,
+                            r.sender||"-", r.bought_by||"-", money(r.amount), money(r.commission),
+                            r.collection_status===DEFERRED
+                              ? `<span class="badge warn">${r.collection_status}</span>`
+                              : r.collection_status,
+                            r.sender_debt ? money(r.sender_debt) : "-", r.destination]);
   const byEmp = accTableHtml(
     ["الموظف","عدد العمليات","مبلغ الشراء","العمولة المحقّقة"],
     s.purchases_by_employee, r=>[r.bought_by, r.count, money(r.amount), money(r.commission)]);

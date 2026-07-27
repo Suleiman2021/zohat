@@ -37,6 +37,7 @@ def summary(db: Session = Depends(get_session), user: User = Depends(admin_or_ac
     recovered = sum(c["invested_capital"] for s, c in rows if s.collection_status == COLLECTED)
     cash_collected = sum(c["collected_actual"] for _, c in rows)
     receivables = sum(c["remaining"] for _, c in rows)
+    sender_debt = sum(c.get("sender_debt", 0.0) for _, c in rows)   # ذمم آجلة على المرسلين
 
     # القيود اليدوية
     jq = select(JournalEntry)
@@ -51,7 +52,7 @@ def summary(db: Session = Depends(get_session), user: User = Depends(admin_or_ac
               "opex": opex, "invested": invested, "recovered": recovered,
               "cash_collected": cash_collected,
               "cash_in": sum(c["cash_in"] for _, c in rows),
-              "receivables": receivables,
+              "receivables": receivables, "sender_debt": sender_debt,
               "goods_total": sum(c.get("goods_value", 0) or 0 for s, c in rows) or
                              sum(s.goods_value or 0 for s, _ in rows),
               "count": len(rows)}
@@ -73,10 +74,12 @@ def summary(db: Session = Depends(get_session), user: User = Depends(admin_or_ac
         if s.financing != COMPANY:
             continue
         purchases_detail.append({
-            # الزبون = صاحب الشحنة = المستلِم
+            # الزبون = صاحب الشحنة = المستلِم، والمرسِل هو من تُطالَب به الذمة عند «آجل»
             "ref_no": s.ref_no, "ship_date": str(s.ship_date), "customer": s.receiver_name,
-            "bought_by": s.bought_by, "amount": c["invested_capital"],
-            "commission": c["commission"], "collection_status": s.collection_status,
+            "sender": s.sender_name, "bought_by": s.bought_by,
+            "amount": c["invested_capital"], "commission": c["commission"],
+            "collection_status": s.collection_status,
+            "sender_debt": c.get("sender_debt", 0.0),
             "destination": s.to_city,
         })
         emp = s.bought_by or "—"
@@ -95,14 +98,32 @@ def summary(db: Session = Depends(get_session), user: User = Depends(admin_or_ac
         branch_comparison.append({"city": city, "revenue": round(rev, 2),
                                    "expenses": round(exp, 2), "net": round(rev - exp, 2)})
 
-    # الذمم حسب مكتب الاستلام
+    # الذمم حسب مكتب الاستلام (لا تشمل «آجل» لأنها ليست على المكتب)
     to_cities = sorted({s.to_city for s, _ in rows if s.to_city})
     receivables_by_office = []
     for city in to_cities:
         due = sum(c["cod_due"] for s, c in rows if s.to_city == city)
         got = sum(c["collected_actual"] for s, c in rows if s.to_city == city)
-        receivables_by_office.append({"city": city, "cod_due": round(due, 2),
-                                       "collected": round(got, 2), "remaining": round(due - got, 2)})
+        if due or got:
+            receivables_by_office.append({"city": city, "cod_due": round(due, 2),
+                                          "collected": round(got, 2), "remaining": round(due - got, 2)})
+
+    # الذمم الآجلة — على المرسِل نفسه لا على مكتب الوجهة
+    by_sender: dict[str, dict] = {}
+    for s, c in rows:
+        amount = c.get("sender_debt", 0.0)
+        if not amount:
+            continue
+        name = s.sender_name or "— بلا اسم مرسِل —"
+        e = by_sender.setdefault(name, {"sender": name, "count": 0, "amount": 0.0, "refs": []})
+        e["count"] += 1
+        e["amount"] += amount
+        e["refs"].append(s.ref_no)
+    deferred_by_sender = [{"sender": v["sender"], "count": v["count"],
+                           "amount": round(v["amount"], 2),
+                           "refs": ", ".join(str(r) for r in sorted(v["refs"]))}
+                          for v in sorted(by_sender.values(), key=lambda x: -x["amount"])]
+    deferred_total = round(sum(v["amount"] for v in by_sender.values()), 2)
 
     alerts = [{"ref_no": s.ref_no, "customer": s.receiver_name, "message": c["alert"]}
               for s, c in rows if c["alert"]]
@@ -115,6 +136,8 @@ def summary(db: Session = Depends(get_session), user: User = Depends(admin_or_ac
         "total_payments": kpi["total_payments"],
         "cash_collected": round(cash_collected, 2),
         "receivables": round(receivables, 2),
+        "sender_debt": round(sender_debt, 2),
+        "total_receivables": round(receivables + sender_debt, 2),
         "operating_net": round(operating_net, 2),
         "cash_net": round(cash_net, 2),
         "expenses_by_category": {k: round(v, 2) for k, v in by_cat.items()},
@@ -126,6 +149,8 @@ def summary(db: Session = Depends(get_session), user: User = Depends(admin_or_ac
             for v in by_employee.values()],
         "branch_comparison": branch_comparison,
         "receivables_by_office": receivables_by_office,
+        "deferred_by_sender": deferred_by_sender,
+        "deferred_total": deferred_total,
         "alerts": alerts,
     }
 

@@ -6,8 +6,8 @@
 <meta name="theme-color" content="#183C60">
 <title>زوهات — نظام الشحن والتخليص</title>
 <link rel="manifest" href="manifest.json">
-<!-- ?v=20 يكسر أي كاش قديم لدى المتصفحات التي علِقت على نسخة سابقة -->
-<link rel="stylesheet" href="css/style.css?v=20">
+<!-- ?v=21 يكسر أي كاش قديم لدى المتصفحات التي علِقت على نسخة سابقة -->
+<link rel="stylesheet" href="css/style.css?v=21">
 </head>
 <body>
 <!-- شاشة الدخول -->
@@ -16,7 +16,10 @@
     <img src="icons/logo.svg" class="logo-login" alt="زوهات — ZOHAT Customs Clearance">
     <h2>تسجيل الدخول</h2>
     <input name="username" placeholder="اسم المستخدم" required autocomplete="username">
-    <input name="password" type="password" placeholder="كلمة المرور" required autocomplete="current-password">
+    <div class="pw-wrap">
+      <input name="password" id="pw" type="password" placeholder="كلمة المرور" required autocomplete="current-password">
+      <button type="button" id="pwToggle" class="pw-eye" aria-label="إظهار كلمة المرور" title="إظهار كلمة المرور">👁</button>
+    </div>
     <button type="submit">دخول</button>
     <p id="loginErr" class="err"></p>
   </form>
@@ -41,8 +44,8 @@
 <!-- إشعارات مؤقتة (toast) -->
 <div id="toasts" aria-live="polite"></div>
 
-<script src="js/api.js?v=20"></script>
-<script src="js/app.js?v=20"></script>
+<script src="js/api.js?v=21"></script>
+<script src="js/app.js?v=21"></script>
 <script>
 if ('serviceWorker' in navigator)
   navigator.serviceWorker.register('sw.js').catch(()=>{});
