@@ -114,9 +114,16 @@ const plainText = html => {
   const d=document.createElement("div"); d.innerHTML=String(html??"");
   return (d.textContent||"").trim();
 };
-// تصدير Excel (.xlsx) بنفس أعمدة الطباعة المختارة — الأرقام تُصدَّر كأرقام حقيقية
-async function exportXlsx(cols, rows, selectedKeys, title){
+// تصدير Excel (.xlsx) بنفس أعمدة الطباعة التي حدّدها المدير — الأرقام تُصدَّر كأرقام حقيقية.
+// view: مفتاح الأعمدة (invoice/reports/customs) — تُقرأ طازجة من الخادم كي يسري
+// أي تعديل يجريه المدير فوراً على بقية المستخدمين دون إعادة تسجيل دخول.
+async function exportXlsx(cols, rows, view, title){
   if(!rows || !rows.length){ toast("لا توجد بيانات للتصدير", true); return; }
+  try{
+    const fresh=await API.get("/api/settings/print");
+    if(fresh) PRINT_COLS=fresh;
+  }catch(e){/* تعذّر التحديث → نستخدم المحفوظ حالياً */}
+  const selectedKeys=PRINT_COLS[view]||[];
   const sel=(selectedKeys&&selectedKeys.length)?new Set(selectedKeys):null;
   const use=cols.filter(([k])=>!sel||sel.has(k));
   const headers=use.map(([,label])=>label);
@@ -176,14 +183,15 @@ $("#loginForm").addEventListener("submit",async e=>{
 });
 $("#logout").addEventListener("click",()=>{API.clear();location.reload();});
 
-// إظهار/إخفاء كلمة المرور في شاشة الدخول
+// إظهار/إخفاء كلمة المرور — أيقونة عين خطّية تُشطب عند الإظهار
 (()=>{
-  const t=$("#pwToggle"), pw=$("#pw");
+  const t=$("#pwToggle"), pw=$("#pw"), slash=$("#pwEyeSlash");
   if(!t||!pw) return;
   t.onclick=()=>{
     const show = pw.type==="password";
     pw.type = show ? "text" : "password";
-    t.textContent = show ? "🙈" : "👁";
+    if(slash) slash.style.display = show ? "" : "none";
+    t.classList.toggle("on", show);
     const label = show ? "إخفاء كلمة المرور" : "إظهار كلمة المرور";
     t.setAttribute("aria-label", label); t.title = label;
     pw.focus();
@@ -596,7 +604,7 @@ async function vBroker(){
     const rows=await API.get("/api/shipments", params);
     lastRows=rows; renderBroker(rows, load);
   };
-  $("#bxl").onclick=()=>exportXlsx(BROKER_COLS, lastRows, PRINT_COLS.customs, "كشف الجمارك");
+  $("#bxl").onclick=()=>exportXlsx(BROKER_COLS, lastRows, "customs", "كشف الجمارك");
   $("#bseg").querySelectorAll(".seg-btn").forEach(b=>b.onclick=()=>{
     tab=b.dataset.tab;
     $("#bseg").querySelectorAll(".seg-btn").forEach(x=>x.classList.toggle("active",x===b));
@@ -687,7 +695,7 @@ async function vInvoice(){
     $("#custs").innerHTML=names.map(n=>`<option value="${n}">`).join("");
   });
   $("#pr").onclick=()=>printDoc("portrait");
-  $("#ixl").onclick=()=>exportXlsx(INVOICE_COLS, invRows, PRINT_COLS.invoice,
+  $("#ixl").onclick=()=>exportXlsx(INVOICE_COLS, invRows, "invoice",
     invName?`فاتورة ${invName}`:"فاتورة الزبون");
   $("#go").onclick=async()=>{
     const receiver=$("#recv").value.trim();
@@ -760,7 +768,7 @@ async function vReports(){
     $("#rk").innerHTML=K.map(([l,val])=>`<div class="kpi"><div class="label">${l}</div><div class="val">${val}</div></div>`).join("");
     $("#rtbl").innerHTML=reportsTable(rows);
   };
-  $("#exp").onclick=()=>exportXlsx(REPORT_COLS, lastRows, PRINT_COLS.reports, "تقرير الشحنات");
+  $("#exp").onclick=()=>exportXlsx(REPORT_COLS, lastRows, "reports", "تقرير الشحنات");
   $("#go").click();
 }
 
@@ -1084,18 +1092,18 @@ async function vPrintFx(){
   };
   v.innerHTML=`<h1>الطباعة والمعادلات</h1>
 
-    <div class="card"><h3>🖨 أعمدة طباعة فاتورة الزبون</h3>
-      <p class="hint">الأعمدة المؤشَّرة فقط تظهر في ملف الـ PDF عند الطباعة — الشاشة تعرض كل الأعمدة دائماً.</p>
+    <div class="card"><h3>🖨 أعمدة فاتورة الزبون (الطباعة وتصدير Excel)</h3>
+      <p class="hint">الأعمدة المؤشَّرة فقط تظهر عند <b>الطباعة</b> وفي <b>ملف Excel المُصدَّر</b> — أما الشاشة فتعرض كل الأعمدة دائماً للعمل.</p>
       <div class="chk-grid">${colBoxes(INVOICE_COLS, PRINT_COLS.invoice, "invoice")}</div></div>
 
-    <div class="card"><h3>🖨 أعمدة طباعة لوحة التقارير</h3>
+    <div class="card"><h3>🖨 أعمدة لوحة التقارير (الطباعة وتصدير Excel)</h3>
       <p class="hint">التقارير تُطبع بالوضع العرضي (landscape) تلقائياً لاستيعاب الأعمدة الكثيرة.</p>
       <div class="chk-grid">${colBoxes(REPORT_COLS, PRINT_COLS.reports, "reports")}</div></div>
 
-    <div class="card"><h3>🖨 أعمدة طباعة كشف الجمارك (المخلص الكمركي)</h3>
-      <p class="hint">ما تحدّده هنا يسري على كل المستخدمين — عند طباعة كشف الجمارك أو تصديره إلى Excel.</p>
+    <div class="card"><h3>🖨 أعمدة كشف الجمارك (الطباعة وتصدير Excel)</h3>
+      <p class="hint">ما تحدّده هنا يسري على كل المستخدمين فوراً — عند الطباعة أو التصدير إلى Excel.</p>
       <div class="chk-grid">${colBoxes(BROKER_COLS, PRINT_COLS.customs, "customs")}</div>
-      <button class="primary" id="saveCols">حفظ أعمدة الطباعة</button></div>
+      <button class="primary" id="saveCols">حفظ أعمدة الطباعة والتصدير</button></div>
 
     <div class="card"><h3>⚙ الثوابت الحسابية</h3>
       <div class="filters">
@@ -1185,7 +1193,7 @@ async function vPrintFx(){
     try{
       const payload={invoice:collect("invoice"), reports:collect("reports"), customs:collect("customs")};
       PRINT_COLS=await API.put("/api/settings/print", payload);
-      toast("تم حفظ أعمدة الطباعة — سرت على كل المستخدمين");
+      toast("تم الحفظ — تسري على الطباعة وتصدير Excel لكل المستخدمين");
     }catch(err){ if(err.message!=="empty") toast(err.message, true); }
   };
 

@@ -6,8 +6,8 @@
 <meta name="theme-color" content="#183C60">
 <title>زوهات — نظام الشحن والتخليص</title>
 <link rel="manifest" href="manifest.json">
-<!-- ?v=21 يكسر أي كاش قديم لدى المتصفحات التي علِقت على نسخة سابقة -->
-<link rel="stylesheet" href="css/style.css?v=21">
+<!-- ?v=22 يكسر أي كاش قديم لدى المتصفحات التي علِقت على نسخة سابقة -->
+<link rel="stylesheet" href="css/style.css?v=22">
 </head>
 <body>
 <!-- شاشة الدخول -->
@@ -18,7 +18,14 @@
     <input name="username" placeholder="اسم المستخدم" required autocomplete="username">
     <div class="pw-wrap">
       <input name="password" id="pw" type="password" placeholder="كلمة المرور" required autocomplete="current-password">
-      <button type="button" id="pwToggle" class="pw-eye" aria-label="إظهار كلمة المرور" title="إظهار كلمة المرور">👁</button>
+      <button type="button" id="pwToggle" class="pw-eye" aria-label="إظهار كلمة المرور" title="إظهار كلمة المرور">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path id="pwEyeShape" d="M1.8 12S5.4 5.2 12 5.2 22.2 12 22.2 12 18.6 18.8 12 18.8 1.8 12 1.8 12Z"/>
+          <circle cx="12" cy="12" r="3.1"/>
+          <line id="pwEyeSlash" x1="4" y1="20" x2="20" y2="4" style="display:none"/>
+        </svg>
+      </button>
     </div>
     <button type="submit">دخول</button>
     <p id="loginErr" class="err"></p>
@@ -44,8 +51,8 @@
 <!-- إشعارات مؤقتة (toast) -->
 <div id="toasts" aria-live="polite"></div>
 
-<script src="js/api.js?v=21"></script>
-<script src="js/app.js?v=21"></script>
+<script src="js/api.js?v=22"></script>
+<script src="js/app.js?v=22"></script>
 <script>
 if ('serviceWorker' in navigator)
   navigator.serviceWorker.register('sw.js').catch(()=>{});
