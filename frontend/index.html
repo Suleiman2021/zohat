@@ -6,8 +6,8 @@
 <meta name="theme-color" content="#183C60">
 <title>زوهات — نظام الشحن والتخليص</title>
 <link rel="manifest" href="manifest.json">
-<!-- ?v=25 يكسر أي كاش قديم لدى المتصفحات التي علِقت على نسخة سابقة -->
-<link rel="stylesheet" href="css/style.css?v=25">
+<!-- ?v=26 يكسر أي كاش قديم لدى المتصفحات التي علِقت على نسخة سابقة -->
+<link rel="stylesheet" href="css/style.css?v=26">
 </head>
 <body>
 <!-- شاشة الدخول -->
@@ -20,14 +20,14 @@
       <input name="password" id="pw" type="password" placeholder="كلمة المرور" required autocomplete="current-password">
       <button type="button" id="pwToggle" class="pw-eye" aria-label="إظهار كلمة المرور" title="إظهار كلمة المرور">
         <!-- عين مفتوحة: الكلمة مخفيّة (اضغط للإظهار) -->
-        <svg id="pwIconShow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+        <svg class="ic-show" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
           <circle cx="12" cy="12" r="3"/>
         </svg>
         <!-- عين مغلقة (جفن مُسبل برموش): الكلمة ظاهرة (اضغط للإخفاء) -->
-        <svg id="pwIconHide" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
-             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden>
+        <svg class="ic-hide" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M2 9c2.4 3.6 5.8 5.6 10 5.6S19.6 12.6 22 9"/>
           <line x1="12" y1="14.6" x2="12" y2="18.2"/>
           <line x1="5.4" y1="12.6" x2="3.4" y2="15.8"/>
@@ -59,8 +59,8 @@
 <!-- إشعارات مؤقتة (toast) -->
 <div id="toasts" aria-live="polite"></div>
 
-<script src="js/api.js?v=25"></script>
-<script src="js/app.js?v=25"></script>
+<script src="js/api.js?v=26"></script>
+<script src="js/app.js?v=26"></script>
 <script>
 if ('serviceWorker' in navigator)
   navigator.serviceWorker.register('sw.js').catch(()=>{});

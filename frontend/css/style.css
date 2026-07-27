@@ -31,9 +31,10 @@ input:focus,select:focus{border-color:var(--teal)!important;box-shadow:0 0 0 3px
 .brand span{display:block;font-size:11px;color:var(--dteal);font-weight:600;letter-spacing:1px}
 .brand.small{font-size:24px}
 .login-card input{padding:12px;border:1px solid var(--line);border-radius:var(--radius-sm);font-size:16px}
-.login-card button,button.primary{background:var(--teal);color:#fff;border:0;padding:11px 18px;
+/* :not(.pw-eye) يستثني زر إظهار كلمة المرور من تنسيق أزرار البطاقة الممتلئة */
+.login-card button:not(.pw-eye),button.primary{background:var(--teal);color:#fff;border:0;padding:11px 18px;
   border-radius:var(--radius-sm);font-size:15px;font-weight:700;min-height:var(--tap)}
-.login-card button:hover,button.primary:hover{background:var(--dteal)}
+.login-card button:not(.pw-eye):hover,button.primary:hover{background:var(--dteal)}
 button.primary.gold{background:var(--gold);color:#3a2c00}
 button.primary.gold:hover{background:#b8931f}
 .login-card small{color:#889}
@@ -41,23 +42,21 @@ button.primary.gold:hover{background:#b8931f}
 /* حقل كلمة المرور مع زر الإظهار/الإخفاء (أيقونة خطّية متناسقة مع هوية النظام) */
 .pw-wrap{position:relative;display:flex}
 .pw-wrap input{width:100%;padding-inline-end:48px!important}
-/* زر بلا خلفية إطلاقاً — الأيقونة وحدها هي الزر.
-   الأسبقية مرفوعة (.login-card button.pw-eye) لأن قاعدة «.login-card button» أعلاه
-   تعطي كل أزرار بطاقة الدخول خلفية تركوازية فتطمس الأيقونة. */
-.login-card button.pw-eye,
+/* زر بلا خلفية إطلاقاً — الأيقونة وحدها هي الزر */
 button.pw-eye{position:absolute;inset-inline-end:8px;top:50%;transform:translateY(-50%);
-  background:none;background-color:transparent;border:0;box-shadow:none;cursor:pointer;
+  background:none!important;border:0;box-shadow:none;cursor:pointer;
   padding:0;margin:0;width:30px;height:30px;min-height:0;font-size:0;
   color:var(--muted);display:grid;place-items:center;
   transition:color .15s,transform .1s}
 button.pw-eye svg{width:21px;height:21px;display:block;stroke:currentColor;fill:none}
-button.pw-eye svg[hidden]{display:none}
-.login-card button.pw-eye:hover,
-button.pw-eye:hover{background:none;background-color:transparent;color:var(--teal)}
-button.pw-eye:focus-visible{background:none;color:var(--teal);
+/* تبديل الأيقونتين بصنف على الزر (أوثق من سمة hidden على عناصر SVG) */
+button.pw-eye .ic-hide{display:none}
+button.pw-eye.revealed .ic-show{display:none}
+button.pw-eye.revealed .ic-hide{display:block}
+button.pw-eye:hover{color:var(--teal)}
+button.pw-eye:focus-visible{color:var(--teal);
   outline:2px solid var(--teal);outline-offset:3px;border-radius:6px}
-.login-card button.pw-eye:active,
-button.pw-eye:active{transform:translateY(-50%) scale(.9);background:none}
+button.pw-eye:active{transform:translateY(-50%) scale(.9)}
 
 /* ---------- هيكل التطبيق ---------- */
 .app{display:grid;grid-template-columns:240px minmax(0,1fr);min-height:100vh;min-height:100dvh}
