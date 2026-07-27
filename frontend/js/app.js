@@ -183,25 +183,21 @@ $("#loginForm").addEventListener("submit",async e=>{
 });
 $("#logout").addEventListener("click",()=>{API.clear();location.reload();});
 
-// إظهار/إخفاء كلمة المرور — يبدّل بين العين المفتوحة والمغلقة.
-// يعمل بصنف CSS وبإخفاء مباشر معاً، فيصمد حتى لو حمّل المتصفح نسخة HTML قديمة.
+// إظهار/إخفاء كلمة المرور — 👁 حين تكون مخفيّة، و🙈 حين تكون ظاهرة.
+// يُكتب الرمز من هنا كي يعمل حتى لو بقيت نسخة HTML قديمة في المتصفح.
 (()=>{
   const t=$("#pwToggle"), pw=$("#pw");
   if(!t||!pw) return;
-  const icOpen  = t.querySelector(".ic-show") || t.querySelector("#pwIconShow");
-  const icClose = t.querySelector(".ic-hide") || t.querySelector("#pwIconHide");
   const paint=show=>{
-    t.classList.toggle("revealed", show);
-    if(icOpen)  { icOpen.style.display  = show ? "none" : "block"; icOpen.hidden  = show; }
-    if(icClose) { icClose.style.display = show ? "block" : "none"; icClose.hidden = !show; }
+    t.textContent = show ? "🙈" : "👁";
+    const label = show ? "إخفاء كلمة المرور" : "إظهار كلمة المرور";
+    t.setAttribute("aria-label", label); t.title = label;
   };
-  paint(false);                                  // الحالة الابتدائية: عين مفتوحة
+  paint(false);
   t.onclick=()=>{
     const show = pw.type==="password";           // سنُظهر الكلمة الآن؟
     pw.type = show ? "text" : "password";
     paint(show);
-    const label = show ? "إخفاء كلمة المرور" : "إظهار كلمة المرور";
-    t.setAttribute("aria-label", label); t.title = label;
     pw.focus();
   };
 })();
