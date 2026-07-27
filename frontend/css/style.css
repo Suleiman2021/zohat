@@ -41,16 +41,23 @@ button.primary.gold:hover{background:#b8931f}
 /* حقل كلمة المرور مع زر الإظهار/الإخفاء (أيقونة خطّية متناسقة مع هوية النظام) */
 .pw-wrap{position:relative;display:flex}
 .pw-wrap input{width:100%;padding-inline-end:48px!important}
-/* زر بلا خلفية إطلاقاً — الأيقونة وحدها هي الزر */
-.pw-eye{position:absolute;inset-inline-end:8px;top:50%;transform:translateY(-50%);
-  background:none;border:0;box-shadow:none;cursor:pointer;padding:0;
-  width:30px;height:30px;color:var(--muted);
-  display:grid;place-items:center;transition:color .15s,transform .1s}
-.pw-eye svg{width:21px;height:21px;display:block}
-.pw-eye svg[hidden]{display:none}
-.pw-eye:hover,.pw-eye:focus-visible{background:none;color:var(--teal)}
-.pw-eye:active{transform:translateY(-50%) scale(.9);background:none}
-.pw-eye:focus-visible{outline:2px solid var(--teal);outline-offset:3px;border-radius:6px}
+/* زر بلا خلفية إطلاقاً — الأيقونة وحدها هي الزر.
+   الأسبقية مرفوعة (.login-card button.pw-eye) لأن قاعدة «.login-card button» أعلاه
+   تعطي كل أزرار بطاقة الدخول خلفية تركوازية فتطمس الأيقونة. */
+.login-card button.pw-eye,
+button.pw-eye{position:absolute;inset-inline-end:8px;top:50%;transform:translateY(-50%);
+  background:none;background-color:transparent;border:0;box-shadow:none;cursor:pointer;
+  padding:0;margin:0;width:30px;height:30px;min-height:0;font-size:0;
+  color:var(--muted);display:grid;place-items:center;
+  transition:color .15s,transform .1s}
+button.pw-eye svg{width:21px;height:21px;display:block;stroke:currentColor;fill:none}
+button.pw-eye svg[hidden]{display:none}
+.login-card button.pw-eye:hover,
+button.pw-eye:hover{background:none;background-color:transparent;color:var(--teal)}
+button.pw-eye:focus-visible{background:none;color:var(--teal);
+  outline:2px solid var(--teal);outline-offset:3px;border-radius:6px}
+.login-card button.pw-eye:active,
+button.pw-eye:active{transform:translateY(-50%) scale(.9);background:none}
 
 /* ---------- هيكل التطبيق ---------- */
 .app{display:grid;grid-template-columns:240px minmax(0,1fr);min-height:100vh;min-height:100dvh}
