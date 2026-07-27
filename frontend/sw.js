@@ -1,5 +1,5 @@
 // Service Worker — الشبكة أولاً لملفات الواجهة (تصل التحديثات فوراً)، والكاش احتياطي دون إنترنت
-const CACHE = "zohat-v26";
+const CACHE = "zohat-v27";
 const SHELL = ["./","index.html","css/style.css","js/api.js","js/app.js","manifest.json",
                "icons/logo.svg","icons/logo-white.svg"];
 
@@ -18,9 +18,14 @@ self.addEventListener("fetch", e => {
       JSON.stringify({detail:"لا يوجد اتصال بالإنترنت"}),{status:503,headers:{"Content-Type":"application/json"}})));
     return;
   }
-  // ملفات الواجهة: الشبكة أولاً (كي لا تعلق نسخة قديمة)، ثم الكاش عند انقطاع الإنترنت
+  // صفحة التطبيق وعامل الخدمة: تجاوز كاش المتصفح تماماً كي لا تعلق نسخة HTML قديمة
+  // (fetch العادي يحترم كاش المتصفح فقد يعيد نسخة قديمة دون لمس الشبكة)
+  const isShell = e.request.mode === "navigate" ||
+                  ["/", "/index.html", "/sw.js", "/manifest.json"].includes(url.pathname);
+  const req = isShell ? new Request(e.request, {cache: "reload"}) : e.request;
+  // الشبكة أولاً، ثم الكاش عند انقطاع الإنترنت
   e.respondWith(
-    fetch(e.request).then(res=>{
+    fetch(req).then(res=>{
       const copy=res.clone();
       caches.open(CACHE).then(c=>c.put(e.request,copy)).catch(()=>{});
       return res;

@@ -24,6 +24,20 @@ app.add_middleware(
     allow_methods=["*"], allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def _no_cache_shell(request, call_next):
+    """يمنع المتصفح من تخزين صفحة التطبيق وعامل الخدمة.
+    بدونها يبقى المستخدم على نسخة HTML قديمة بعد كل تحديث، لأن الصفحة
+    نفسها لا تحمل باصمة نسخة (بعكس ملفات CSS/JS التي تُطلب بـ ?v=)."""
+    response = await call_next(request)
+    path = request.url.path
+    if path in ("/", "/index.html", "/sw.js", "/manifest.json"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 app.include_router(auth.router)
 app.include_router(shipments.router)
 app.include_router(accounting.router)
