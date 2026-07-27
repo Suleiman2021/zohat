@@ -26,6 +26,9 @@ let COMPANY={phone:"",name:"",logo:""};   // بيانات الشركة (اسم/�
 let PRINT_COLS={invoice:[], reports:[], customs:[]};
 const CUSTOMS_ST=["قيد الجمركة","تمّت الجمركة"];   // حالة محسوبة تلقائياً، ليست قائمة قابلة للتعديل
 const EXPORTED="تم التصدير";
+const DEFERRED="آجل";                    // ذمة على المرسِل بدل التحصيل في مكتب الوجهة
+const FIN_COMPANY="الشركة اشترت نيابةً عنه";
+const FIN_CUSTOMER="الزبون اشترى بنفسه";
 
 // يحمّل القوائم والإعدادات. مُحصَّن ضد فشل الشبكة: إن تعذّر أي نداء (خادم نائم مثلاً)
 // نُبقي القيم السابقة بدل إفراغ الواجهة، ونعيد المحاولة مرة واحدة تلقائياً.
@@ -90,6 +93,7 @@ const REPORT_COLS=[
   ["fees_payment","دفع الأجور",r=>r.fees_payment],
   ["cash_in","المحصّل نقداً",r=>money(r.cash_in)],
   ["cod_due","المستحق ضد الدفع",r=>money(r.cod_due)],
+  ["sender_debt","ذمة على المرسِل (آجل)",r=>money(r.sender_debt)],
   ["customs_status","حالة الجمركة",r=>badge(r.customs_status,r.customs_computed)],
   ["export_status","حالة التصدير",r=>badge(r.export_status,r.export_status==='تم التصدير')],
   ["delivery_status","حالة التسليم",r=>badge(r.delivery_status,r.delivery_status==='تم التسليم')],
@@ -330,8 +334,9 @@ function reportsTable(rows){
   if(!rows.length) return empty("لا توجد شحنات مطابقة");
   return colsTable(REPORT_COLS, rows, PRINT_COLS.reports);
 }
-function shipForm(done, sh){
-  const v=$("#view"); const isEdit=!!sh; const d=sh||{};
+// prefill: قيم مبدئية لشحنة جديدة (تُستخدم في «حفظ وإضافة صنف آخر لنفس الزبون»)
+function shipForm(done, sh, prefill){
+  const v=$("#view"); const isEdit=!!sh; const d=sh||prefill||{};
   v.innerHTML=`<h1>${isEdit?`تعديل الشحنة — القيد ${sh.ref_no}`:'شحنة جديدة — استلام'}</h1>
   <div class="card"><form class="grid" id="f">
     <label>التاريخ<input type="date" name="ship_date" value="${d.ship_date||''}" required></label>
@@ -348,10 +353,11 @@ function shipForm(done, sh){
     <label>بلد المنشأ<input name="origin_country" value="${d.origin_country||''}"></label>
     <label>الوزن (كغ)<input type="number" step="0.01" name="weight_kg" value="${d.weight_kg??''}"></label>
     <label>قيمة الفاتورة ($)<input type="number" step="0.01" name="goods_value" value="${d.goods_value??''}"></label>
-    <label>ثمن البضاعة ($)<input type="number" step="0.01" name="goods_price" value="${d.goods_price??''}"
-      placeholder="يدخل بحسابات الشراء نيابةً"></label>
+    <label>ثمن البضاعة ($)<input type="number" step="0.01" name="goods_price" id="gprice" value="${d.goods_price??''}"
+      placeholder="اتركه فارغاً إن اشترى الزبون بنفسه"></label>
     <label>الأجور الإضافية ($)<input type="number" step="0.01" name="extra_fees" value="${d.extra_fees??''}"></label>
-    <label>تمويل البضاعة<select name="financing">${opts(FINANCE, d.financing)}</select></label>
+    <label>تمويل البضاعة (تلقائي)<input id="fin" readonly class="derived" value="${d.financing||FIN_CUSTOMER}">
+      <small class="hint">يُحدَّد تلقائياً من ثمن البضاعة</small></label>
     <label>من قام بالشراء<input name="bought_by" value="${d.bought_by||''}" placeholder="عند شراء الشركة"></label>
     <label>جهة الإرسال<select name="from_city">${opts(CITIES, d.from_city||API.branch)}</select></label>
     <label>جهة الاستلام<select name="to_city">${opts(CITIES, d.to_city)}</select></label>
@@ -363,7 +369,9 @@ function shipForm(done, sh){
     <label>تاريخ التسليم<input type="date" name="delivery_date" value="${d.delivery_date||''}"></label>
     <label>حالة التحصيل<select name="collection_status">${opts(COLLECTION, d.collection_status)}</select></label>
     `:''}
-    <div style="grid-column:1/-1"><button class="primary" type="submit">${isEdit?'حفظ التعديلات':'حفظ'}</button>
+    <div style="grid-column:1/-1" class="btn-row">
+      <button class="primary" type="submit">${isEdit?'حفظ التعديلات':'حفظ'}</button>
+      ${isEdit?'':'<button class="primary gold" type="button" id="saveMore">حفظ وإضافة صنف آخر لنفس الزبون</button>'}
       <button class="sm" type="button" id="cancel">إلغاء</button></div>
   </form></div>
   ${isEdit?'':'<p class="hint">ملاحظة: حساب الرسوم الجمركية يتم لاحقاً من صفحة «حساب الجمارك».</p>'}`;
@@ -373,45 +381,99 @@ function shipForm(done, sh){
     const its=await API.get("/api/items",{q:e.target.value});
     $("#items").innerHTML=its.map(i=>`<option value="${i.name}">`).join("");
   });
+  // تمويل البضاعة مشتق من ثمن البضاعة (نفس قاعدة الباكند)
+  const syncFin=()=>{ $("#fin").value = Number($("#gprice").value||0)>0 ? FIN_COMPANY : FIN_CUSTOMER; };
+  $("#gprice").addEventListener("input", syncFin); syncFin();
   $("#cancel").onclick=done;
-  $("#f").addEventListener("submit",async e=>{
-    e.preventDefault(); const fd=Object.fromEntries(new FormData(e.target));
+
+  const save=async()=>{
+    const fd=Object.fromEntries(new FormData($("#f")));
     ["count","weight_kg","goods_value","goods_price","extra_fees"].forEach(k=>fd[k]=Number(fd[k]||0));
-    try{
-      if(isEdit) await API.put(`/api/shipments/${sh.id}`, fd);
-      else await API.post("/api/shipments",fd);
-      toast(isEdit?"تم حفظ التعديلات":"تم تسجيل الشحنة");
-      done();
-    }catch(err){ toast(err.message, true); }
+    if(isEdit) await API.put(`/api/shipments/${sh.id}`, fd);
+    else await API.post("/api/shipments",fd);
+    return fd;
+  };
+  $("#f").addEventListener("submit",async e=>{
+    e.preventDefault();
+    try{ await save(); toast(isEdit?"تم حفظ التعديلات":"تم تسجيل الشحنة"); done(); }
+    catch(err){ toast(err.message, true); }
   });
+  // حفظ ثم إعادة فتح النموذج ببيانات الزبون نفسها (صنف آخر لنفس الشحنة/الزبون)
+  if($("#saveMore")) $("#saveMore").onclick=async()=>{
+    try{
+      const fd=await save();
+      toast("تم الحفظ — أدخل الصنف التالي لنفس الزبون");
+      const keep={};
+      ["ship_date","sender_name","sender_phone","receiver_name","receiver_phone",
+       "from_city","to_city","fees_payment","driver_name"].forEach(k=>keep[k]=fd[k]);
+      shipForm(done, null, keep);
+    }catch(err){ toast(err.message, true); }
+  };
 }
 
 // ---------- حساب الجمارك (خطوة منفصلة) ----------
 async function vCustoms(){
   const v=$("#view"); v.innerHTML=`<h1>حساب الجمارك</h1>
-    <div class="card"><h3>بانتظار الجمركة</h3><div id="pending"></div></div>
-    <div class="card"><h3>مكتملة (قابلة للتصحيح)</h3><div id="done"></div></div>`;
-  const [pending, done] = await Promise.all([
-    API.get("/api/shipments",{customs_status:"قيد الجمركة"}),
-    API.get("/api/shipments",{customs_status:"تمّت الجمركة"}),
-  ]);
-  const rowHtml=(r,label)=>`<tr>
-    <td>${r.ref_no}</td><td>${r.receiver_name}</td><td>${r.item_name}</td><td>${r.weight_kg} كغ</td>
-    <td>${money(r.goods_value)}</td><td>${money(r.fees_total)}</td>
-    <td><button class="sm primary" data-id="${r.id}">${label}</button></td></tr>`;
-  $("#pending").innerHTML = pending.length ? wrapTable(
-    `<table><thead><tr><th>القيد</th><th>الزبون (المستلِم)</th><th>الصنف</th><th>الوزن</th><th>القيمة</th>
-      <th>معاينة الرسوم</th><th></th></tr></thead><tbody>${pending.map(r=>rowHtml(r,"احتساب")).join("")}</tbody></table>`)
-    : empty("لا توجد شحنات بانتظار الجمركة");
-  $("#done").innerHTML = done.length ? wrapTable(
-    `<table><thead><tr><th>القيد</th><th>الزبون (المستلِم)</th><th>الصنف</th><th>الوزن</th><th>القيمة</th>
-      <th>المجموع النهائي</th><th></th></tr></thead><tbody>${done.map(r=>rowHtml(r,"تعديل")).join("")}</tbody></table>`)
-    : empty("لا توجد شحنات محتسبة بعد");
-  const all=[...pending,...done];
-  v.querySelectorAll("button[data-id]").forEach(b=>b.onclick=()=>{
-    const sh=all.find(r=>String(r.id)===b.dataset.id);
-    customsForm(sh, vCustoms);
-  });
+    <div class="card"><div class="filters">
+      <label>من تاريخ<input type="date" id="cdf"></label>
+      <label>إلى تاريخ<input type="date" id="cdt"></label>
+      <label>رقم القيد<input id="cref" placeholder="مثال 1005"></label>
+      <label>المستلِم<input id="crecv" placeholder="اسم جزئي"></label>
+      <label>المرسِل<input id="csnd" placeholder="اسم جزئي"></label>
+      <label>الصنف<input id="citem" placeholder="اسم جزئي"></label>
+      <label>جهة الإرسال<select id="cfc">${optsWithAll(CITIES)}</select></label>
+      <label>جهة الاستلام<select id="ctc">${optsWithAll(CITIES)}</select></label>
+      <label>حالة التصدير<select id="cexp">${optsWithAll(EXPORT_ST)}</select></label>
+      <button class="primary" id="cgo">بحث</button>
+      <button class="sm" id="cclr">مسح الفلاتر</button>
+    </div></div>
+    <div class="card"><h3>بانتظار الجمركة <span class="count-badge" id="np"></span></h3><div id="pending"></div></div>
+    <div class="card"><h3>مكتملة (قابلة للتصحيح) <span class="count-badge" id="nd"></span></h3><div id="done"></div></div>`;
+
+  const load=async()=>{
+    const base={date_from:$("#cdf").value, date_to:$("#cdt").value,
+      receiver:$("#crecv").value, sender:$("#csnd").value,
+      from_city:$("#cfc").value, to_city:$("#ctc").value,
+      export_status:$("#cexp").value};
+    const [pending, done] = await Promise.all([
+      API.get("/api/shipments",{...base, customs_status:"قيد الجمركة"}),
+      API.get("/api/shipments",{...base, customs_status:"تمّت الجمركة"}),
+    ]);
+    // فلاتر تُطبَّق محلياً (رقم القيد والصنف)
+    const ref=$("#cref").value.trim(), item=$("#citem").value.trim();
+    const local=rows=>rows.filter(r=>
+      (!ref || String(r.ref_no).includes(ref)) &&
+      (!item || (r.item_name||"").includes(item)));
+    const P=local(pending), D=local(done);
+
+    const rowHtml=(r,label)=>`<tr>
+      <td>${r.ref_no}</td><td>${r.ship_date}</td><td>${r.receiver_name||"-"}</td>
+      <td>${r.item_name||"-"}</td><td>${r.weight_kg} كغ</td>
+      <td>${money(r.goods_value)}</td><td>${money(r.fees_total)}</td>
+      <td><button class="sm primary" data-id="${r.id}">${label}</button></td></tr>`;
+    const head=last=>`<tr><th>القيد</th><th>التاريخ</th><th>الزبون (المستلِم)</th><th>الصنف</th>
+      <th>الوزن</th><th>القيمة</th><th>${last}</th><th></th></tr>`;
+    $("#np").textContent=P.length; $("#nd").textContent=D.length;
+    $("#pending").innerHTML = P.length ? wrapTable(
+      `<table><thead>${head("معاينة الرسوم")}</thead><tbody>${P.map(r=>rowHtml(r,"احتساب")).join("")}</tbody></table>`)
+      : empty("لا توجد شحنات بانتظار الجمركة");
+    $("#done").innerHTML = D.length ? wrapTable(
+      `<table><thead>${head("المجموع النهائي")}</thead><tbody>${D.map(r=>rowHtml(r,"تعديل")).join("")}</tbody></table>`)
+      : empty("لا توجد شحنات محتسبة بعد");
+    const all=[...P,...D];
+    v.querySelectorAll("button[data-id]").forEach(b=>b.onclick=()=>{
+      customsForm(all.find(r=>String(r.id)===b.dataset.id), vCustoms);
+    });
+  };
+  $("#cgo").onclick=load;
+  $("#cclr").onclick=()=>{
+    ["cdf","cdt","cref","crecv","csnd","citem"].forEach(id=>$("#"+id).value="");
+    ["cfc","ctc","cexp"].forEach(id=>$("#"+id).value="");
+    load();
+  };
+  ["cref","crecv","csnd","citem"].forEach(id=>
+    $("#"+id).addEventListener("keydown",e=>{ if(e.key==="Enter") load(); }));
+  load();
 }
 // خلايا معاينة حساب الجمارك — نفس أعمدة ورقة «حساب الجمارك» في الإكسل بالضبط (D..M)
 function breakdownCells(c){
@@ -563,14 +625,14 @@ function renderBroker(rows, load){
   });
 }
 
-// ---------- فرع الوجهة: الطرود المُصدَّرة الواصلة — تسليم/تحصيل/دفع الأجور ----------
+// ---------- فرع الوجهة: الشحنات المُصدَّرة الواصلة — تسليم/تحصيل/دفع الأجور ----------
 async function vDeliver(){
   const v=$("#view");
-  v.innerHTML=`<h1>الطرود الواصلة لمكتبك</h1>
-    <p class="hint">هذه الطرود صُدِّرت إليك من فرع المصدر. حدِّث دفع الأجور، والتسليم، والتحصيل (عند الدفع نيابةً عن الزبون).</p>
+  v.innerHTML=`<h1>الشحنات الواصلة لمكتبك</h1>
+    <p class="hint">هذه الشحنات صُدِّرت إليك من فرع المصدر. حدِّث دفع الأجور، والتسليم، والتحصيل (عند الدفع نيابةً عن الزبون).</p>
     <div id='t' class='card'></div>`;
   const rows=await API.get("/api/shipments",{to_city:API.branch, export_status:EXPORTED});
-  if(!rows.length){ $("#t").innerHTML=empty("لا توجد طرود مُصدَّرة واصلة لمكتبك حالياً"); return; }
+  if(!rows.length){ $("#t").innerHTML=empty("لا توجد شحنات مُصدَّرة واصلة لمكتبك حالياً"); return; }
   $("#t").innerHTML=wrapTable(`<table><thead><tr>
     <th>القيد</th><th>المرسِل</th><th>المستلِم (صاحب الشحنة)</th><th>الصنف</th><th>أجور الشحن</th>
     <th>المستحق</th><th>دفع الأجور</th><th>التسليم</th><th>التحصيل</th><th></th></tr></thead>
@@ -651,6 +713,7 @@ async function vReports(){
      <label>حالة الجمركة<select id="rcs">${optsWithAll(CUSTOMS_ST)}</select></label>
      <label>حالة التسليم<select id="rds">${optsWithAll(DELIVERY)}</select></label>
      <label>حالة التحصيل<select id="rcol">${optsWithAll(COLLECTION)}</select></label>
+     <label class="chk-inline"><input type="checkbox" id="ralpha"> ترتيب أبجدي حسب المستلِم</label>
      <button class="primary" id="go">بحث</button>
      <button class="sm" id="rpr">🖨 طباعة</button>
      <button class="sm" id="exp">⬇ تصدير Excel</button>
@@ -666,16 +729,20 @@ async function vReports(){
       to_city:$("#rtc").value, receiver:$("#rsnd").value, financing:$("#rfin").value,
       fees_payment:$("#rfp").value, customs_status:$("#rcs").value,
       delivery_status:$("#rds").value, collection_status:$("#rcol").value});
+    // الترتيب الأبجدي يسري على الشاشة والطباعة وتصدير Excel معاً
+    if($("#ralpha").checked)
+      rows.sort((a,b)=>(a.receiver_name||"").localeCompare(b.receiver_name||"","ar"));
     lastRows=rows;
     const owners=new Set(rows.map(r=>r.receiver_name));   // صاحب الشحنة = المستلِم
     const sum=k=>rows.reduce((a,r)=>a+(Number(r[k])||0),0);
     const countIf=(k,v)=>rows.filter(r=>r[k]===v).length;
-    const K=[["عدد الطرود",rows.length],["عدد الزبائن",owners.size],
+    const K=[["عدد الشحنات",rows.length],["عدد الزبائن",owners.size],
       ["إجمالي الوزن",sum("weight_kg").toFixed(1)+" كغ"],["إجمالي قيمة البضاعة",money(sum("goods_value"))],
       ["إجمالي أجور الشحن والجمركة",money(sum("fees_total"))],["إجمالي المبلغ",money(sum("grand_total"))],
       ["الواصل نقداً",money(sum("cash_in"))],["غير الواصل (ضد الدفع)",money(sum("cod_due"))],
+      ["ذمة على المرسِل (آجل)",money(sum("sender_debt"))],
       ["عمولة الشراء",money(sum("commission"))],["المحصَّل فعلياً (نقد)",money(sum("collected_actual"))],
-      ["المتبقي في الذمة",money(sum("remaining"))],["طرود قيد التسليم",countIf("delivery_status","قيد التسليم")]];
+      ["المتبقي في الذمة",money(sum("remaining"))],["شحنات قيد التسليم",countIf("delivery_status","قيد التسليم")]];
     $("#rk").innerHTML=K.map(([l,val])=>`<div class="kpi"><div class="label">${l}</div><div class="val">${val}</div></div>`).join("");
     $("#rtbl").innerHTML=reportsTable(rows);
   };

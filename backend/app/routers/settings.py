@@ -29,23 +29,36 @@ DEFAULT_LISTS = {
                             ("قرطاسية", False), ("ضيافة", False), ("رسوم حكومية", False),
                             ("عمولات", False), ("مصاريف بنكية", False), ("أخرى", False)],
     "financing_types": [("الزبون اشترى بنفسه", True), ("الشركة اشترت نيابةً عنه", True)],
-    "payment_methods": [("واصل نقداً", True), ("ضد الدفع", True)],
+    "payment_methods": [("واصل نقداً", True), ("ضد الدفع", True), ("آجل", True)],
     "delivery_statuses": [("قيد التسليم", True), ("تم التسليم", True)],
-    "collection_statuses": [("لم يُحصَّل", True), ("تم التحصيل", True)],
+    "collection_statuses": [("لم يُحصَّل", True), ("تم التحصيل", True), ("آجل", True)],
     "export_statuses": [("قيد التصدير", True), ("تم التصدير", True)],
 }
 
 
 def seed_lists(db: Session):
-    """يزرع أي قائمة غائبة — يعمل للقاعدة الجديدة وللقواعد القديمة (يضيف القوائم المستجدّة فقط)."""
-    existing_keys = {r.list_key for r in db.exec(select(ListItem)).all()}
+    """يزرع أي قائمة غائبة، ويضيف أي قيمة محميّة مستجدّة إلى القوائم الموجودة
+    (مثل «آجل») — دون المساس بالقيم التي أضافها المستخدم."""
+    rows = db.exec(select(ListItem)).all()
+    existing_keys = {r.list_key for r in rows}
+    existing_pairs = {(r.list_key, r.value) for r in rows}
+    max_order = {}
+    for r in rows:
+        max_order[r.list_key] = max(max_order.get(r.list_key, -1), r.sort_order)
     added = False
     for key, values in DEFAULT_LISTS.items():
-        if key in existing_keys:
+        if key not in existing_keys:
+            for i, (val, protected) in enumerate(values):
+                db.add(ListItem(list_key=key, value=val, protected=protected, sort_order=i))
+            added = True
             continue
-        for i, (val, protected) in enumerate(values):
-            db.add(ListItem(list_key=key, value=val, protected=protected, sort_order=i))
-        added = True
+        # قائمة موجودة: أضِف فقط القيم المحميّة الجديدة التي يعتمد عليها منطق الحسابات
+        for val, protected in values:
+            if protected and (key, val) not in existing_pairs:
+                max_order[key] = max_order.get(key, -1) + 1
+                db.add(ListItem(list_key=key, value=val, protected=True,
+                                sort_order=max_order[key]))
+                added = True
     if added:
         db.commit()
 

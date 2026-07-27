@@ -41,8 +41,22 @@ const API = {
     if(r.status===401){this.clear();location.reload();return;}
     if(!r.ok) throw new Error((await r.json()).detail||"تعذّر التصدير");
     const blob=await r.blob();
+    // داخل برنامج سطح المكتب (WebView2) لا يعمل تنزيل الروابط المؤقتة (blob)،
+    // فنمرّر الملف إلى بايثون ليحفظه عبر نافذة «حفظ باسم» الأصلية.
+    if(window.pywebview && window.pywebview.api && window.pywebview.api.save_file){
+      const b64=await new Promise((res,rej)=>{
+        const fr=new FileReader();
+        fr.onload=()=>res(String(fr.result).split(",")[1]);
+        fr.onerror=()=>rej(new Error("تعذّرت قراءة الملف"));
+        fr.readAsDataURL(blob);
+      });
+      const saved=await window.pywebview.api.save_file(filename, b64);
+      if(saved===false) throw new Error("أُلغي الحفظ");
+      return saved;
+    }
     const url=URL.createObjectURL(blob);
-    const a=document.createElement("a"); a.href=url; a.download=filename; a.click();
+    const a=document.createElement("a"); a.href=url; a.download=filename;
+    document.body.appendChild(a); a.click(); a.remove();
     setTimeout(()=>URL.revokeObjectURL(url),1000);
   },
   async upload(path,file){

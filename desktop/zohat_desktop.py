@@ -1,6 +1,7 @@
 """زوهات — تطبيق سطح المكتب لويندوز.
 نافذة أصلية تفتح النظام المستضاف (Railway) مباشرةً بلا شريط متصفح ولا أي سؤال.
 البيانات تبقى مركزية على الخادم، فيرى كل الموظفين نفس الشحنات لحظياً."""
+import base64
 import json
 import os
 import sys
@@ -95,6 +96,30 @@ button:hover{background:#006C84}
 
 
 class Api:
+    def save_file(self, filename, b64):
+        """يحفظ ملفاً أرسلته الواجهة (تصدير Excel) عبر نافذة «حفظ باسم» الأصلية.
+        ضروري لأن WebView2 لا ينزّل روابط blob المؤقتة كما يفعل المتصفح."""
+        try:
+            data = base64.b64decode(b64)
+        except Exception:
+            return False
+        window = webview.windows[0]
+        downloads = Path.home() / "Downloads"
+        target = window.create_file_dialog(
+            webview.SAVE_DIALOG,
+            directory=str(downloads if downloads.exists() else Path.home()),
+            save_filename=filename,
+        )
+        if not target:
+            return False                      # ألغى المستخدم الحفظ
+        if isinstance(target, (list, tuple)):
+            target = target[0]
+        try:
+            Path(target).write_bytes(data)
+        except OSError:
+            return False
+        return str(target)
+
     def retry(self):
         """يعيد تحميل النظام إن عاد الاتصال، وإلا يبقى على صفحة الانقطاع."""
         url = load_url()

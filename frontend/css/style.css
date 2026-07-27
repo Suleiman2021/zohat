@@ -221,6 +221,19 @@ td .mini{font-size:10px;color:var(--muted);margin-top:2px}
 .file-btn:hover{background:var(--dteal)}
 .btn-row{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0}
 
+/* حقل مشتق تلقائياً (غير قابل للتحرير) */
+input.derived{background:#eef4f9;color:var(--navy);font-weight:700;cursor:not-allowed}
+
+/* مربع اختيار داخل شريط الفلاتر */
+.chk-inline{flex-direction:row!important;align-items:center;gap:7px!important;
+  font-size:13px!important;color:var(--ink)!important;font-weight:600;white-space:nowrap;
+  align-self:end;min-height:var(--tap);padding-bottom:8px}
+.chk-inline input{width:18px;height:18px;accent-color:var(--teal);min-height:auto}
+
+/* عدّاد بجانب عناوين الأقسام */
+.count-badge{display:inline-block;background:var(--teal);color:#fff;border-radius:20px;
+  padding:1px 10px;font-size:12px;font-weight:700;margin-inline-start:6px;min-width:26px;text-align:center}
+
 /* ---------- شاشات متوسطة وموبايل ---------- */
 @media(max-width:900px){
   .app{grid-template-columns:1fr}

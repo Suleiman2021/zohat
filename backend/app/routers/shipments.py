@@ -7,7 +7,7 @@ from ..core.security import (any_role, admin_or_accountant,
                              admin_or_supervisor, can_register)
 from ..models import (User, Shipment, Item, ROLE_BRANCH, ROLE_BROKER,
                       ROLE_COLLECTOR, ROLE_ACCOUNTANT, _as_date)
-from ..calc import compute, calc_cfg, cfg_resolver
+from ..calc import compute, calc_cfg, cfg_resolver, COMPANY, CUSTOMER
 
 router = APIRouter(prefix="/api/shipments", tags=["shipments"])
 
@@ -51,6 +51,12 @@ def _apply_two_party(patch: dict) -> dict:
         patch["two_party_expense"] = float(val)
         patch["two_party_auto"] = False
     return patch
+
+
+def _sync_financing(sh: Shipment):
+    """تمويل البضاعة يُشتق تلقائياً من ثمن البضاعة:
+    ثمن > 0 ← «الشركة اشترت نيابةً عنه»، وإلا ← «الزبون اشترى بنفسه»."""
+    sh.financing = COMPANY if (sh.goods_price or 0) > 0 else CUSTOMER
 
 
 def _fill_item_code(db: Session, sh: Shipment):
@@ -159,6 +165,7 @@ def create_shipment(sh: Shipment, db: Session = Depends(get_session),
     sh.created_by = user.username
     sh.created_by_name = user.full_name or user.username
     _fill_item_code(db, sh)
+    _sync_financing(sh)   # التمويل مشتق من ثمن البضاعة
     # تثبيت نسخة المعادلات السارية الآن — أي تعديل لاحق عليها لن يمسّ هذه الشحنة
     resolve = cfg_resolver(db)
     sh.calc_version_id = resolve.current_id
@@ -256,6 +263,8 @@ def update_shipment(sid: int, patch: dict, db: Session = Depends(get_session),
         sh.branch = sh.from_city
     if "item_name" in allowed:
         _fill_item_code(db, sh)   # صنف جديد بلا كود → اجلب كوده من قاعدة الأصناف
+    if "goods_price" in allowed:
+        _sync_financing(sh)       # التمويل يتبع ثمن البضاعة دائماً
     db.add(sh); db.commit(); db.refresh(sh)
     return _enrich(db, sh)
 

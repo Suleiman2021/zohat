@@ -10,7 +10,9 @@ from .core.config import (DEFAULT_TAX_ADVANCE, DEFAULT_BUY_COMMISSION,
 
 CASH = "واصل نقداً"
 COD = "ضد الدفع"
+DEFERRED = "آجل"          # ذمة على المرسِل، لا تُحصَّل في مكتب الوجهة
 COMPANY = "الشركة اشترت نيابةً عنه"
+CUSTOMER = "الزبون اشترى بنفسه"
 COLLECTED = "تم التحصيل"
 DELIVERED = "تم التسليم"
 
@@ -76,9 +78,15 @@ FORMULA_SPECS = [
      "الأجور تُحصَّل فوراً إذا كان الدفع «واصل نقداً»",
      'fees_total if fees_payment == "واصل نقداً" else 0'),
     ("cod_due", "المستحق ضد الدفع", "سجل الشحنات!S5",
-     "الأجور إن كانت «ضد الدفع» + (قيمة البضاعة + العمولة) إن اشترت الشركة",
+     "ما يُحصَّل في مكتب الوجهة: الأجور إن كانت «ضد الدفع» + (ثمن البضاعة + العمولة) "
+     "إن اشترت الشركة — ولا يشمل ما كان «آجل» (فهو ذمة على المرسِل)",
      '(fees_total if fees_payment == "ضد الدفع" else 0)'
-     ' + ((invested_capital + commission) if is_company else 0)'),
+     ' + ((invested_capital + commission) if is_company and collection_status != "آجل" else 0)'),
+    ("sender_debt", "ذمة على المرسِل (آجل)", "—",
+     "المبالغ المؤجَّلة التي تبقى ديناً على المرسِل بدل تحصيلها من المستلِم: "
+     "الأجور إن كان دفعها «آجل» + (ثمن البضاعة + العمولة) إن كانت حالة التحصيل «آجل»",
+     '(fees_total if fees_payment == "آجل" else 0)'
+     ' + ((invested_capital + commission) if is_company and collection_status == "آجل" else 0)'),
     ("collected_actual", "المحصَّل فعلياً", "سجل الشحنات!AH5",
      "كامل المستحق عند تعليم الشحنة «تم التحصيل»",
      'cod_due if collection_status == "تم التحصيل" else 0'),
@@ -233,11 +241,16 @@ _SUPERSEDED = {
         "(weight_kg / 1000) * two_party_per_ton if two_party_per_ton > 0 else two_party_expense_input",
         "two_party_expense_input",
     ],
+    # الصيغة القديمة لم تكن تعرف خيار «آجل» فكانت تُحمّل مكتب الوجهة ثمن البضاعة دائماً
+    "cod_due": [
+        '(fees_total if fees_payment == "ضد الدفع" else 0)'
+        ' + ((invested_capital + commission) if is_company else 0)',
+    ],
 }
 
 
 # رقم دفعة الترقية — زِدْه عند إضافة معادلات جديدة إلى _SUPERSEDED
-_UPGRADE_MARK = "calc_upgrade_applied_v2"
+_UPGRADE_MARK = "calc_upgrade_applied_v3"
 
 
 def upgrade_superseded_formulas(db) -> bool:
