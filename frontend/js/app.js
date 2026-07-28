@@ -904,7 +904,8 @@ const txnBadge=t=>({[TXN_CHARGE]:'<span class="badge pend">استحقاق ▲</s
 // رصيد ملوّن: موجب = مستحق علينا تحصيله، سالب = رصيد دائن
 const bal=v=>`<b class="${v>0.01?'neg':(v<-0.01?'pos':'')}">${money(v)}</b>`;
 
-async function vMahmoud(){
+// initialTab: تبويب البداية — يُستخدم عند الرجوع من كشف الحساب أو نموذج العملية
+async function vMahmoud(initialTab){
   const v=$("#view");
   v.innerHTML=`<h1>حسابات محمود</h1>
     <p class="hint">نظام محاسبي <b>مستقل ويدوي بالكامل</b>. الرصيد لا يُعدَّل يدوياً —
@@ -920,7 +921,7 @@ async function vMahmoud(){
     <div id="mtab"></div>`;
   const TABS=[["summary","الملخّص"],["parties","الجهات والأرصدة"],["entry","تسجيل عملية"],
               ["ledger","سجل العمليات"],["customs","مقارنة الجمارك"]];
-  let cur="summary";
+  let cur=TABS.some(([k])=>k===initialTab) ? initialTab : "summary";
   const period=()=>({date_from:$("#mdf").value, date_to:$("#mdt").value});
   const renderTabs=()=>{
     $("#mtabs").innerHTML=TABS.map(([k,l])=>
@@ -980,7 +981,7 @@ async function mSummary(box, period, go){
     <div class="card"><h3>حسب نوع الجهة</h3>${types}</div>
     <div class="card"><h3>حسب السبب / البند</h3>${reasons}</div>`;
   box.querySelectorAll("[data-open]").forEach(b=>b.onclick=()=>
-    mStatement(Number(b.dataset.open), go));
+    mStatement(Number(b.dataset.open), "summary"));
 }
 
 // ------------------------ الجهات والأرصدة ------------------------
@@ -1029,7 +1030,7 @@ async function mParties(box, period, reload, go){
     catch(err){ toast(err.message, true); }
   });
   $("#pl").querySelectorAll("[data-stmt]").forEach(b=>b.onclick=()=>
-    mStatement(Number(b.dataset.stmt), go));
+    mStatement(Number(b.dataset.stmt), "parties"));
   $("#pl").querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{
     if(!confirm("حذف هذه الجهة؟")) return;
     try{ await API.del("/api/mahmoud/parties/"+b.dataset.del); toast("تم الحذف"); reload(); }
@@ -1062,7 +1063,7 @@ async function mParties(box, period, reload, go){
 }
 
 // ------------------- كشف حساب جهة (نافذة كاملة) -------------------
-async function mStatement(pid, go){
+async function mStatement(pid, fromTab){
   const v=$("#view");
   v.innerHTML=`<div class="loading"><div class="spinner"></div></div>`;
   const d=await API.get(`/api/mahmoud/parties/${pid}/statement`);
@@ -1089,9 +1090,9 @@ async function mStatement(pid, go){
         <b>${money(t.balance)}</b></p></div>
     <div class="card"><h3>كشف الحساب مرتّباً بالتاريخ</h3><div id="lg"></div></div>`;
 
-  $("#back").onclick=()=>{ vMahmoud(); };
+  $("#back").onclick=()=>vMahmoud(fromTab||"parties");
   $("#pr").onclick=()=>printDoc("portrait");
-  $("#newTxn").onclick=()=>mTxnDialog(pid, p.name, ()=>mStatement(pid, go));
+  $("#newTxn").onclick=()=>mTxnDialog(pid, p.name, ()=>mStatement(pid, fromTab));
   $("#xl").onclick=()=>exportXlsx([
       ["txn_date","التاريخ",r=>r.txn_date],["created_at_time","الوقت",r=>r.created_at_time],
       ["id","رقم العملية",r=>r.id],["txn_type","نوع الحركة",r=>r.txn_type],
@@ -1125,12 +1126,12 @@ async function mStatement(pid, go){
     const reason=prompt("سبب الإلغاء (اختياري):","");
     if(reason===null) return;
     try{ await API.post(`/api/mahmoud/txn/${b.dataset.void}/void`,{reason});
-      toast("أُلغي القيد — بقي في الكشف للمراجعة"); mStatement(pid, go);
+      toast("أُلغي القيد — بقي في الكشف للمراجعة"); mStatement(pid, fromTab);
     }catch(err){ toast(err.message, true); }
   });
   $("#lg").querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>{
     const r=d.ledger.find(x=>String(x.id)===b.dataset.edit);
-    mTxnDialog(pid, p.name, ()=>mStatement(pid, go), r);
+    mTxnDialog(pid, p.name, ()=>mStatement(pid, fromTab), r);
   });
 }
 
@@ -1139,29 +1140,37 @@ async function mTxnDialog(pid, pname, done, existing){
   const isEdit=!!existing;
   const v=$("#view");
   const parties = pid ? null : await API.get("/api/mahmoud/parties");
+  // novalidate: نتحقّق بأنفسنا برسائل عربية واضحة بدل نوافذ المتصفح.
+  // المبلغ وحده إلزامي — وبقية الحقول اختيارية تماماً.
   v.innerHTML=`<h1>${isEdit?`تعديل العملية رقم ${existing.id}`:"تسجيل عملية"}</h1>
-    <div class="card"><form class="grid" id="tf">
+    <div class="card"><form class="grid" id="tf" novalidate>
       ${pid?`<label>الجهة<input value="${escAttr(pname)}" readonly class="derived"></label>`
-           :`<label>الجهة<select name="party_id" required>${
+           :`<label>الجهة<select name="party_id" id="pp">${
               parties.map(p=>`<option value="${p.id}">${p.name} — ${p.box_type} (متبقٍ ${money(p.balance)})</option>`).join("")
              }</select></label>`}
       <label>نوع العملية<select name="txn_type" id="tt" ${isEdit?'disabled':''}>
         ${opts(TXN_TYPES, existing?existing.txn_type:TXN_CHARGE)}</select></label>
-      <label>التاريخ<input type="date" name="txn_date" value="${existing?existing.txn_date:today()}" required></label>
-      <label>المبلغ ($)<input type="number" step="0.01" name="amount" required
-        value="${existing?existing.amount:""}"></label>
-      <label id="reasonWrap">السبب / البند
+      <label>التاريخ<input type="date" name="txn_date" id="td"
+        value="${existing?existing.txn_date:today()}"></label>
+      <label>المبلغ ($) <span class="req">*</span><input type="number" step="0.01" name="amount" id="am"
+        value="${existing?existing.amount:""}" autofocus></label>
+      <label id="reasonWrap">السبب / البند <span class="opt">(اختياري)</span>
         <input name="reason" list="mreasons" value="${existing?escAttr(existing.reason):""}"
           placeholder="شحنة / عمولة / إيراد / تسوية..."></label>
       <datalist id="mreasons">${CHARGE_REASONS.map(r=>`<option value="${r}">`).join("")}</datalist>
-      <label>التفاصيل<input name="description" value="${existing?escAttr(existing.description):""}"></label>
-      <label>طريقة الدفع<input name="payment_method" value="${existing?escAttr(existing.payment_method):""}"></label>
-      <label>رقم مرجعي (وصل)<input name="ref_no" value="${existing?escAttr(existing.ref_no):""}"></label>
-      <label>ملاحظات<input name="notes" value="${existing?escAttr(existing.notes):""}"></label>
+      <label>التفاصيل <span class="opt">(اختياري)</span>
+        <input name="description" value="${existing?escAttr(existing.description):""}"></label>
+      <label>طريقة الدفع <span class="opt">(اختياري)</span>
+        <input name="payment_method" value="${existing?escAttr(existing.payment_method):""}"></label>
+      <label>رقم مرجعي — وصل <span class="opt">(اختياري)</span>
+        <input name="ref_no" value="${existing?escAttr(existing.ref_no):""}"></label>
+      <label>ملاحظات <span class="opt">(اختياري)</span>
+        <input name="notes" value="${existing?escAttr(existing.notes):""}"></label>
       <div style="grid-column:1/-1" class="btn-row">
         <button class="primary" type="submit">${isEdit?"حفظ التعديل":"حفظ العملية"}</button>
-        <button class="sm" type="button" id="cancel">رجوع</button></div>
+        <button class="sm" type="button" id="cancel">← رجوع</button></div>
     </form>
+    <p class="hint">الحقول المعلّمة بـ <span class="req">*</span> إلزامية فقط، والبقية اختيارية.</p>
     <p class="hint" id="effect"></p></div>`;
 
   const effect=()=>{
@@ -1180,6 +1189,12 @@ async function mTxnDialog(pid, pname, done, existing){
     e.preventDefault();
     const fd=Object.fromEntries(new FormData(e.target));
     fd.amount=Number(fd.amount||0);
+    if(!(fd.amount>0)){                       // التحقق الوحيد الإلزامي
+      toast("أدخل المبلغ (أكبر من صفر)", true); $("#am").focus(); return;
+    }
+    if(!fd.txn_date) fd.txn_date=today();     // التاريخ يُملأ تلقائياً إن تُرك فارغاً
+    const btn=e.target.querySelector('button[type="submit"]');
+    btn.disabled=true;                        // منع الحفظ المزدوج بنقرتين سريعتين
     try{
       if(isEdit){ await API.put(`/api/mahmoud/txn/${existing.id}`, fd); toast("تم حفظ التعديل"); }
       else{
@@ -1188,8 +1203,8 @@ async function mTxnDialog(pid, pname, done, existing){
         const r=await API.post("/api/mahmoud/txn", fd);
         toast(`تم التسجيل — الرصيد الجديد ${money(r.party_balance)}`);
       }
-      done();
-    }catch(err){ toast(err.message, true); }
+      done();                                 // العودة للواجهة السابقة
+    }catch(err){ toast(err.message, true); btn.disabled=false; }
   });
 }
 
@@ -1207,9 +1222,9 @@ async function mEntryForm(box, reload, go){
         <button class="sm" data-stmt="${p.id}">كشف الحساب</button></td></tr>`).join("")}
     </tbody></table>`);
   $("#quick").querySelectorAll("[data-new]").forEach(b=>b.onclick=()=>
-    mTxnDialog(Number(b.dataset.new), b.dataset.n, ()=>go("entry")));
+    mTxnDialog(Number(b.dataset.new), b.dataset.n, ()=>vMahmoud("entry")));
   $("#quick").querySelectorAll("[data-stmt]").forEach(b=>b.onclick=()=>
-    mStatement(Number(b.dataset.stmt), go));
+    mStatement(Number(b.dataset.stmt), "entry"));
 }
 
 // ---------------------- سجل العمليات العام ----------------------

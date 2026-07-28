@@ -226,6 +226,9 @@ td .mini{font-size:10px;color:var(--muted);margin-top:2px}
 td.pos,b.pos{color:var(--ok)}
 td.neg,b.neg{color:var(--warn)}
 .badge.info{background:#e8f1fb;color:var(--dteal)}
+/* علامات الحقول: * إلزامي، (اختياري) رمادي خفيف */
+.req{color:var(--warn);font-weight:800}
+.opt{color:#9aa9b8;font-weight:400;font-size:11px}
 tr.void-row td{opacity:.5;text-decoration:line-through}
 tr.void-row td:last-child{text-decoration:none;opacity:.8}
 
