@@ -277,13 +277,16 @@ input.derived{background:#eef4f9;color:var(--navy);font-weight:700;cursor:not-al
 
 /* ---------- الطباعة ----------
    إصلاح «الأعمدة الكثيرة لا تظهر»: خط أصغر مع التفاف النص بدل قصّه،
-   والجداول تكسر الصفحات بأمان، والأعمدة غير المختارة (np) تُخفى، والتقارير عرضية. */
+   والجداول تكسر الصفحات بأمان، والأعمدة غير المختارة (np) تُخفى، والتقارير عرضية.
+   هامش الصفحة صفر (يُضبط في printDoc) كي لا يطبع المتصفح رابط الموقع والتاريخ
+   في الترويسة/التذييل — والهوامش تُعوَّض هنا بحشوة على المحتوى نفسه. */
+@page{margin:0}
 @media print{
   .sidebar,.no-print,button,#toasts,.view>h1{display:none!important}
   .np{display:none!important}
   .only-print{display:block}
   .app{display:block}
-  .view{padding:0;overflow:visible}
+  .view{padding:9mm 8mm;overflow:visible}
   body{background:#fff;font-size:11px}
   .card{border:none;box-shadow:none;padding:0;margin-bottom:8px}
   .table-scroll{max-height:none;overflow:visible;border:none}

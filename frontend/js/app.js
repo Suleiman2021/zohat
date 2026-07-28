@@ -140,7 +140,9 @@ async function exportXlsx(cols, rows, view, title){
 // طباعة باتجاه صفحة محدد: التقارير عرضية (أعمدة كثيرة) والفاتورة طولية
 function printDoc(orientation){
   const st=document.createElement("style");
-  st.textContent=`@page{size:A4 ${orientation||"portrait"};margin:9mm}`;
+  // margin:0 يمنع المتصفح من طباعة ترويسة/تذييل تحوي رابط الموقع والتاريخ،
+  // والهوامش تُعوَّض بحشوة داخلية على المحتوى (.view) في تنسيق الطباعة.
+  st.textContent=`@page{size:A4 ${orientation||"portrait"};margin:0}`;
   document.head.appendChild(st);
   window.print();
   setTimeout(()=>st.remove(),1000);
@@ -581,7 +583,7 @@ async function vBroker(){
         <button class="sm" id="bxl">⬇ تصدير Excel</button>
       </div>
     </div>
-    <div class="only-print">${brandHead()}<h2 class="print-title">كشف بيانات التخليص الجمركي</h2></div>
+    <div class="only-print">${brandHead()}</div>
     <div class="card"><div id="btbl"></div></div>`;
   let tab="تم التصدير", lastRows=[];
   const load=async()=>{
