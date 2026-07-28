@@ -33,6 +33,13 @@ DEFAULT_LISTS = {
     "delivery_statuses": [("قيد التسليم", True), ("تم التسليم", True)],
     "collection_statuses": [("لم يُحصَّل", True), ("تم التحصيل", True), ("آجل", True)],
     "export_statuses": [("قيد التصدير", True), ("تم التصدير", True)],
+    # بنود حركات «حسابات محمود» (نظام منفصل)
+    "mahmoud_categories": [("تحصيل من زبون", False), ("دفعة لمخلّص", False),
+                            ("أجور شحن", False), ("رسوم جمركية", False),
+                            ("مصروف طرفين", False), ("نقل داخلي", False),
+                            ("إيجار", False), ("رواتب", False), ("محروقات", False),
+                            ("ضيافة", False), ("تحويل بين الصناديق", False),
+                            ("سلفة", False), ("تسديد سلفة", False), ("أخرى", False)],
 }
 
 

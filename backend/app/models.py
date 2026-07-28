@@ -143,6 +143,66 @@ class ListItem(SQLModel, table=True):
     sort_order: int = 0
 
 
+# ================== حسابات محمود (نظام محاسبي منفصل تماماً) ==================
+# نظام يدوي بالكامل لا يتأثر بالشحنات ولا يؤثر عليها — عدا شاشة مقارنة الجمارك
+# التي تعرض الأرقام الأصلية بجانب اليدوية للمراجعة فقط.
+
+BOX_OFFICE = "مكتب"
+BOX_CUSTOMER = "زبون"
+BOX_BROKER_SY = "مخلص سوري"
+BOX_BROKER_IQ = "مخلص عراقي"
+BOX_OTHER = "أخرى"
+BOX_TYPES = (BOX_OFFICE, BOX_CUSTOMER, BOX_BROKER_SY, BOX_BROKER_IQ, BOX_OTHER)
+
+
+class MBox(SQLModel, table=True):
+    """صندوق: مكتب أو زبون أو مخلّص (سوري/عراقي)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    box_type: str = BOX_OFFICE
+    opening_balance: float = 0.0    # رصيد افتتاحي
+    notes: str = ""
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class MEntry(SQLModel, table=True):
+    """حركة صندوق: إيراد أو مصروف بتفاصيلها."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    box_id: int = Field(index=True)
+    entry_date: date
+    kind: str = "مصروف"             # إيراد / مصروف
+    category: str = ""              # البند
+    description: str = ""           # التفاصيل
+    amount: float = 0.0
+    counterparty: str = ""          # الجهة/الشخص
+    payment_method: str = ""
+    ref_no: str = ""                # رقم مرجعي (وصل/قيد) اختياري
+    notes: str = ""
+    created_by: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    @field_validator("entry_date", mode="before")
+    @classmethod
+    def _v_date(cls, v): return _as_date(v)
+
+
+class MCustomsCheck(SQLModel, table=True):
+    """مقارنة الجمارك: مجاميع يدوية يُدخلها المحاسب لفترة، تُقارَن بالأصلية المحسوبة."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    date_from: date
+    date_to: date
+    manual_syrian: float = 0.0      # مجموع الرسم الجمركي السوري (يدوي)
+    manual_iraqi: float = 0.0       # مجموع الرسم الجمركي العراقي (يدوي)
+    notes: str = ""
+    created_by: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    @field_validator("date_from", "date_to", mode="before")
+    @classmethod
+    def _v_dates(cls, v): return _as_date(v)
+
+
 class JournalEntry(SQLModel, table=True):
     """دفتر القيود المحاسبية (إيراد/مصروف يدوي)."""
     id: Optional[int] = Field(default=None, primary_key=True)

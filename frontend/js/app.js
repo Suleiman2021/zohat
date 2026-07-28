@@ -5,22 +5,22 @@ const el = (t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=
 
 // قوائم الأدوار: أي صفحة يراها كل دور
 const MENUS = {
-  admin:      ["dashboard","shipments","customs","broker","invoice","reports","accounting","items","lists","printfx","users"],
-  supervisor: ["dashboard","shipments","customs","invoice","reports","accounting"],
-  accountant: ["dashboard","shipments","reports","accounting","invoice"],
-  collector:  ["shipments"],
+  admin:      ["dashboard","shipments","customs","broker","invoice","reports","accounting","mahmoud","items","lists","printfx","users"],
+  supervisor: ["dashboard","shipments","customs","invoice","reports","accounting","mahmoud"],
+  accountant: ["dashboard","shipments","reports","accounting","mahmoud","invoice"],
+  collector:  ["shipments","invoice"],
   broker:     ["broker"],
   branch:     ["shipments","deliver","invoice"],
 };
 const TITLES = {dashboard:"لوحة المؤشرات",shipments:"سجل الشحنات",customs:"حساب الجمارك",
-  broker:"التخليص الجمركي",invoice:"فاتورة الزبون",reports:"لوحة التقارير",accounting:"الحسابات",
+  broker:"التخليص الجمركي",invoice:"فاتورة الزبون",reports:"لوحة التقارير",accounting:"الحسابات",mahmoud:"حسابات محمود",
   items:"الأصناف",lists:"القوائم والإعدادات",printfx:"الطباعة والمعادلات",users:"المستخدمون",deliver:"التسليم والتحصيل"};
 const ROLE_LABEL = {admin:"الإدارة الشاملة", supervisor:"المشرف الإداري (صاحب الشركة)",
   accountant:"المحاسب", collector:"مسؤول التجميع", broker:"المخلص الكمركي", branch:"مكتب فرع"};
 
 // القوائم القابلة للإدارة — تُحمَّل من الباكند (GET /api/settings/lists) عند الدخول
 // وتُدار من صفحة «القوائم والإعدادات». القيم هنا افتراضية فقط قبل اكتمال أول تحميل.
-let CITIES=[], PTYPES=[], FINANCE=[], PAY=[], DELIVERY=[], COLLECTION=[], EXPORT_ST=[], EXPENSE_CATS=[];
+let CITIES=[], PTYPES=[], FINANCE=[], PAY=[], DELIVERY=[], COLLECTION=[], EXPORT_ST=[], EXPENSE_CATS=[], MCATS=[];
 let COMPANY={phone:"",name:"",logo:""};   // بيانات الشركة (اسم/هاتف/لوغو) — تظهر في الترويسات
 // أعمدة الطباعة المختارة من لوحة الإدارة ([] = كل الأعمدة) — تُطبَّق على كل المستخدمين
 let PRINT_COLS={invoice:[], reports:[], customs:[]};
@@ -50,7 +50,7 @@ async function loadLists(retry=true){
   if(P) PRINT_COLS=P;
   CITIES=L.cities||[]; PTYPES=L.parcel_types||[]; FINANCE=L.financing_types||[];
   PAY=L.payment_methods||[]; DELIVERY=L.delivery_statuses||[]; COLLECTION=L.collection_statuses||[];
-  EXPORT_ST=L.export_statuses||["قيد التصدير","تم التصدير"]; EXPENSE_CATS=L.expense_categories||[];
+  EXPORT_ST=L.export_statuses||["قيد التصدير","تم التصدير"]; EXPENSE_CATS=L.expense_categories||[]; MCATS=L.mahmoud_categories||[];
   return true;
 }
 
@@ -209,7 +209,7 @@ function route(key,link){
   $(".sidebar").classList.remove("open");   // إغلاق قائمة الموبايل بعد الاختيار
   $("#view").innerHTML=`<div class="loading"><div class="spinner"></div></div>`;
   ({dashboard:vDashboard,shipments:vShipments,customs:vCustoms,broker:vBroker,invoice:vInvoice,
-    reports:vReports,accounting:vAccounting,items:vItems,lists:vLists,printfx:vPrintFx,users:vUsers,deliver:vDeliver}[key])();
+    reports:vReports,accounting:vAccounting,mahmoud:vMahmoud,items:vItems,lists:vLists,printfx:vPrintFx,users:vUsers,deliver:vDeliver}[key])();
 }
 
 // ---------- لوحة المؤشرات ----------
@@ -890,6 +890,281 @@ async function renderJournal(box, filters){
     catch(err){ toast(err.message, true); }
   });
   load();
+}
+
+// ================= حسابات محمود (نظام محاسبي منفصل تماماً) =================
+const BOX_TYPES=["مكتب","زبون","مخلص سوري","مخلص عراقي","أخرى"];
+const M_KIND=["مصروف","إيراد"];
+
+async function vMahmoud(){
+  const v=$("#view");
+  v.innerHTML=`<h1>حسابات محمود</h1>
+    <p class="hint">نظام محاسبي <b>منفصل تماماً</b> عن النظام الأساسي — كل حركة تُدخَل يدوياً
+      ولا تتأثر بالشحنات. تبويب «مقارنة الجمارك» يعرض الأرقام الأصلية للمراجعة فقط.</p>
+    <div class="card no-print"><div class="filters">
+      <label>من تاريخ<input type="date" id="mdf"></label>
+      <label>إلى تاريخ<input type="date" id="mdt"></label>
+      <button class="primary" id="mgo">عرض</button>
+      <button class="sm" id="mclr">كل الفترات</button>
+    </div></div>
+    <div class="tabs" id="mtabs"></div>
+    <div id="mtab"></div>`;
+  const TABS=[["summary","الملخّص"],["boxes","الصناديق"],["entries","الحركات"],
+              ["customs","مقارنة الجمارك"]];
+  let cur="summary";
+  const period=()=>({date_from:$("#mdf").value, date_to:$("#mdt").value});
+  const renderTabs=()=>{
+    $("#mtabs").innerHTML=TABS.map(([k,l])=>
+      `<button class="tab ${k===cur?'active':''}" data-k="${k}">${l}</button>`).join("");
+    $("#mtabs").querySelectorAll("button").forEach(b=>b.onclick=()=>{
+      cur=b.dataset.k; renderTabs(); body();
+    });
+  };
+  const body=async()=>{
+    const box=$("#mtab");
+    box.innerHTML=`<div class="loading"><div class="spinner"></div></div>`;
+    try{
+      if(cur==="summary")      await mSummary(box, period());
+      else if(cur==="boxes")   await mBoxes(box, period(), body);
+      else if(cur==="entries") await mEntries(box, period(), body);
+      else                     await mCustoms(box, body);
+    }catch(err){ box.innerHTML=`<div class="card">${empty(err.message)}</div>`; }
+  };
+  $("#mgo").onclick=body;
+  $("#mclr").onclick=()=>{ $("#mdf").value=""; $("#mdt").value=""; body(); };
+  renderTabs(); body();
+}
+
+// ----- تبويب الملخّص -----
+async function mSummary(box, period){
+  const s=await API.get("/api/mahmoud/summary", period);
+  const K=[["الرصيد الافتتاحي",s.opening,""],["الإيرادات",s.income,"cash"],
+    ["المصاريف",s.expense,"cod"],["الصافي (إيراد − مصروف)",s.net,"gold"],
+    ["الرصيد الحالي",s.balance,"gold"]];
+  const kpis=K.map(([l,val,c])=>
+    `<div class="kpi ${c}"><div class="label">${l}</div><div class="val">${money(val)}</div></div>`).join("");
+  const byType=s.by_type.length ? wrapTable(`<table><thead><tr>
+      <th>نوع الصندوق</th><th>الرصيد الافتتاحي</th><th>الإيرادات</th><th>المصاريف</th><th>الصافي</th>
+    </tr></thead><tbody>${s.by_type.map(t=>`<tr><td><b>${t.type}</b></td>
+      <td>${money(t.opening)}</td><td>${money(t.income)}</td><td>${money(t.expense)}</td>
+      <td><b>${money(t.net)}</b></td></tr>`).join("")}</tbody></table>`)
+    : empty("لا توجد صناديق بعد");
+  const byCat=s.by_category.length ? wrapTable(`<table><thead><tr>
+      <th>البند</th><th>عدد الحركات</th><th>إيرادات</th><th>مصاريف</th>
+    </tr></thead><tbody>${s.by_category.map(c=>`<tr><td>${c.category}</td><td>${c.count}</td>
+      <td>${money(c.income)}</td><td>${money(c.expense)}</td></tr>`).join("")}</tbody></table>`)
+    : empty("لا توجد حركات ضمن الفترة");
+  box.innerHTML=`<div class="card"><div class="kpis">${kpis}</div>
+      <p class="hint">${s.boxes_count} صندوق · ${s.entries_count} حركة ضمن الفترة</p></div>
+    <div class="card"><h3>حسب نوع الصندوق</h3>${byType}</div>
+    <div class="card"><h3>حسب البند</h3>${byCat}</div>`;
+}
+
+// ----- تبويب الصناديق -----
+async function mBoxes(box, period, reload){
+  const rows=await API.get("/api/mahmoud/boxes", period);
+  box.innerHTML=`<div class="card"><h3>إضافة صندوق</h3>
+      <form class="filters" id="bf">
+        <label>الاسم<input name="name" required placeholder="مثال: مكتب بغداد"></label>
+        <label>النوع<select name="box_type">${opts(BOX_TYPES)}</select></label>
+        <label>رصيد افتتاحي ($)<input type="number" step="0.01" name="opening_balance" value="0"></label>
+        <label>ملاحظات<input name="notes"></label>
+        <button class="primary">إضافة صندوق</button>
+      </form></div>
+    <div class="card"><h3>الصناديق ورصيد كل منها</h3><div id="bl"></div></div>`;
+  const grouped={};
+  rows.forEach(r=>(grouped[r.box_type]=grouped[r.box_type]||[]).push(r));
+  $("#bl").innerHTML = rows.length ? Object.entries(grouped).map(([type,list])=>`
+      <h3 class="sub">${type} <span class="count-badge">${list.length}</span></h3>
+      ${wrapTable(`<table><thead><tr><th>الصندوق</th><th>افتتاحي</th><th>إيرادات</th>
+        <th>مصاريف</th><th>الرصيد</th><th>حركات</th><th>الحالة</th><th>إجراءات</th></tr></thead>
+        <tbody>${list.map(b=>`<tr data-row="${b.id}">
+          <td><b>${b.name}</b>${b.notes?`<div class="mini">${b.notes}</div>`:''}</td>
+          <td>${money(b.opening_balance)}</td><td>${money(b.income)}</td>
+          <td>${money(b.expense)}</td>
+          <td class="${b.balance<0?'neg':'pos'}"><b>${money(b.balance)}</b></td>
+          <td>${b.entries_count}</td>
+          <td>${b.is_active?'<span class="badge done">نشط</span>':'<span class="badge pend">موقوف</span>'}</td>
+          <td class="nowrap"><button class="sm" data-edit="${b.id}">تعديل</button>
+            <button class="sm danger" data-del="${b.id}">حذف</button></td></tr>`).join("")}
+        </tbody></table>`)}`).join("") : empty("لا توجد صناديق — أضف صندوقاً للبدء");
+
+  $("#bf").addEventListener("submit",async e=>{
+    e.preventDefault();
+    const fd=Object.fromEntries(new FormData(e.target));
+    fd.opening_balance=Number(fd.opening_balance||0);
+    try{ await API.post("/api/mahmoud/boxes",fd); toast("تمت إضافة الصندوق"); reload(); }
+    catch(err){ toast(err.message, true); }
+  });
+  $("#bl").querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{
+    if(!confirm("حذف هذا الصندوق؟")) return;
+    try{ await API.del("/api/mahmoud/boxes/"+b.dataset.del); toast("تم الحذف"); reload(); }
+    catch(err){ toast(err.message, true); }
+  });
+  $("#bl").querySelectorAll("[data-edit]").forEach(btn=>btn.onclick=()=>{
+    const b=rows.find(x=>String(x.id)===btn.dataset.edit); if(!b) return;
+    const tr=$("#bl").querySelector(`tr[data-row="${b.id}"]`);
+    tr.innerHTML=`<td><input class="cell-in" data-f="name" value="${escAttr(b.name)}"></td>
+      <td><input class="cell-in" data-f="opening_balance" type="number" step="0.01" value="${b.opening_balance}"></td>
+      <td colspan="2"><select class="cell-in" data-f="box_type">${opts(BOX_TYPES,b.box_type)}</select></td>
+      <td colspan="2"><input class="cell-in" data-f="notes" value="${escAttr(b.notes)}" placeholder="ملاحظات"></td>
+      <td><select class="cell-in" data-f="is_active">
+        <option value="1" ${b.is_active?'selected':''}>نشط</option>
+        <option value="0" ${!b.is_active?'selected':''}>موقوف</option></select></td>
+      <td class="nowrap"><button class="sm primary" data-save>حفظ</button>
+        <button class="sm" data-cancel>إلغاء</button></td>`;
+    tr.querySelector("[data-cancel]").onclick=reload;
+    tr.querySelector("[data-save]").onclick=async()=>{
+      const patch={};
+      tr.querySelectorAll(".cell-in").forEach(i=>patch[i.dataset.f]=i.value);
+      patch.opening_balance=Number(patch.opening_balance||0);
+      patch.is_active = patch.is_active==="1";
+      try{ await API.put("/api/mahmoud/boxes/"+b.id, patch); toast("تم التعديل"); reload(); }
+      catch(err){ toast(err.message, true); }
+    };
+  });
+}
+
+// ----- تبويب الحركات -----
+async function mEntries(box, period, reload){
+  const [boxes, rows] = await Promise.all([
+    API.get("/api/mahmoud/boxes"),
+    API.get("/api/mahmoud/entries", period),
+  ]);
+  const boxOpts=cur=>boxes.map(b=>
+    `<option value="${b.id}" ${String(b.id)===String(cur)?'selected':''}>${b.name} — ${b.box_type}</option>`).join("");
+  box.innerHTML=`<div class="card"><h3>إضافة حركة</h3>
+      ${boxes.length?`<form class="grid" id="ef">
+        <label>التاريخ<input type="date" name="entry_date" value="${today()}" required></label>
+        <label>الصندوق<select name="box_id" required>${boxOpts()}</select></label>
+        <label>النوع<select name="kind">${opts(M_KIND)}</select></label>
+        <label>البند<input name="category" list="mcats" placeholder="اختر أو اكتب"></label>
+        <datalist id="mcats">${MCATS.map(c=>`<option value="${c}">`).join("")}</datalist>
+        <label>المبلغ ($)<input type="number" step="0.01" name="amount" required></label>
+        <label>الجهة/الشخص<input name="counterparty"></label>
+        <label>التفاصيل<input name="description" placeholder="شرح الحركة"></label>
+        <label>طريقة الدفع<input name="payment_method"></label>
+        <label>رقم مرجعي<input name="ref_no" placeholder="وصل/قيد"></label>
+        <label>ملاحظات<input name="notes"></label>
+        <div style="grid-column:1/-1"><button class="primary">إضافة الحركة</button></div>
+      </form>`:empty("أضف صندوقاً أولاً من تبويب «الصناديق»")}</div>
+    <div class="card"><h3>الحركات <span class="count-badge">${rows.length}</span></h3>
+      <div class="filters no-print">
+        <label>الصندوق<select id="fbox"><option value="">الكل</option>${boxOpts()}</select></label>
+        <label>النوع<select id="fkind">${optsWithAll(M_KIND)}</select></label>
+        <label>بحث<input id="fq" placeholder="بند/تفاصيل/جهة"></label>
+        <button class="sm" id="fgo">تصفية</button>
+        <button class="sm" id="exl">⬇ تصدير Excel</button>
+      </div>
+      <div id="el"></div></div>`;
+
+  const paint=list=>{
+    const inc=list.filter(e=>e.kind==="إيراد").reduce((a,e)=>a+e.amount,0);
+    const exp=list.filter(e=>e.kind!=="إيراد").reduce((a,e)=>a+e.amount,0);
+    $("#el").innerHTML = list.length ? `
+      <div class="kpis" style="margin-bottom:12px">
+        <div class="kpi cash"><div class="label">إيرادات</div><div class="val">${money(inc)}</div></div>
+        <div class="kpi cod"><div class="label">مصاريف</div><div class="val">${money(exp)}</div></div>
+        <div class="kpi gold"><div class="label">الصافي</div><div class="val">${money(inc-exp)}</div></div>
+      </div>
+      ${wrapTable(`<table><thead><tr><th>التاريخ</th><th>الصندوق</th><th>النوع</th><th>البند</th>
+        <th>التفاصيل</th><th>الجهة</th><th>المبلغ</th><th>الدفع</th><th>مرجع</th><th>المُدخِل</th><th></th>
+        </tr></thead><tbody>${list.map(e=>`<tr>
+          <td>${e.entry_date}</td><td>${e.box_name}</td>
+          <td>${e.kind==="إيراد"?'<span class="badge done">إيراد</span>':'<span class="badge pend">مصروف</span>'}</td>
+          <td>${e.category||"-"}</td><td>${e.description||"-"}</td><td>${e.counterparty||"-"}</td>
+          <td><b>${money(e.amount)}</b></td><td>${e.payment_method||"-"}</td><td>${e.ref_no||"-"}</td>
+          <td class="mini">${e.created_by||"-"}</td>
+          <td><button class="sm danger" data-del="${e.id}">حذف</button></td>
+        </tr>`).join("")}</tbody></table>`)}` : empty("لا توجد حركات مطابقة");
+    $("#el").querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{
+      if(!confirm("حذف هذه الحركة؟")) return;
+      try{ await API.del("/api/mahmoud/entries/"+b.dataset.del); toast("تم الحذف"); reload(); }
+      catch(err){ toast(err.message, true); }
+    });
+  };
+  let shown=rows; paint(shown);
+
+  $("#fgo").onclick=async()=>{
+    shown=await API.get("/api/mahmoud/entries",{...period, box_id:$("#fbox").value,
+      kind:$("#fkind").value, q:$("#fq").value});
+    paint(shown);
+  };
+  $("#exl").onclick=()=>exportXlsx([
+      ["entry_date","التاريخ",r=>r.entry_date],["box_name","الصندوق",r=>r.box_name],
+      ["kind","النوع",r=>r.kind],["category","البند",r=>r.category||"-"],
+      ["description","التفاصيل",r=>r.description||"-"],["counterparty","الجهة",r=>r.counterparty||"-"],
+      ["amount","المبلغ",r=>r.amount],["payment_method","الدفع",r=>r.payment_method||"-"],
+      ["ref_no","مرجع",r=>r.ref_no||"-"],["created_by","المُدخِل",r=>r.created_by||"-"],
+    ], shown, "mahmoud", "حسابات محمود — الحركات");
+  if($("#ef")) $("#ef").addEventListener("submit",async e=>{
+    e.preventDefault();
+    const fd=Object.fromEntries(new FormData(e.target));
+    fd.amount=Number(fd.amount||0); fd.box_id=Number(fd.box_id);
+    try{ await API.post("/api/mahmoud/entries",fd); toast("تمت إضافة الحركة"); reload(); }
+    catch(err){ toast(err.message, true); }
+  });
+}
+
+// ----- تبويب مقارنة الجمارك (عرض فقط — لا يعدّل النظام الأساسي) -----
+async function mCustoms(box, reload){
+  const rows=await API.get("/api/mahmoud/customs");
+  box.innerHTML=`<div class="card"><h3>مقارنة جديدة</h3>
+      <p class="hint">أدخل المجاميع اليدوية لفترة، ويعرض النظام بجانبها المجموع الأصلي المحسوب
+        من الشحنات للمقارنة. <b>لا يؤثر ذلك على أي بيانات في النظام الأساسي.</b></p>
+      <form class="grid" id="cf">
+        <label>من تاريخ<input type="date" name="date_from" id="cdf" required></label>
+        <label>إلى تاريخ<input type="date" name="date_to" id="cdt" required></label>
+        <label>مجموع الرسم السوري (يدوي)<input type="number" step="0.01" name="manual_syrian" required></label>
+        <label>مجموع الرسم العراقي (يدوي)<input type="number" step="0.01" name="manual_iraqi" required></label>
+        <label>ملاحظات<input name="notes"></label>
+        <div style="grid-column:1/-1" class="btn-row">
+          <button class="primary">حفظ المقارنة</button>
+          <button class="sm" type="button" id="peek">👁 معاينة الأصلي للفترة</button>
+        </div>
+      </form>
+      <div id="peekout"></div></div>
+    <div class="card"><h3>المقارنات المحفوظة</h3><div id="cl"></div></div>`;
+
+  const cell=(manual,actual,diff)=>`<td>${money(manual)}</td><td>${money(actual)}</td>
+    <td class="${Math.abs(diff)<0.01?'pos':'neg'}"><b>${diff>0?"+":""}${money(diff)}</b></td>`;
+  $("#cl").innerHTML = rows.length ? wrapTable(`<table><thead><tr>
+      <th>الفترة</th><th>شحنات</th>
+      <th>سوري يدوي</th><th>سوري أصلي</th><th>الفرق</th>
+      <th>عراقي يدوي</th><th>عراقي أصلي</th><th>الفرق</th>
+      <th>الحالة</th><th>ملاحظات</th><th></th></tr></thead>
+      <tbody>${rows.map(c=>`<tr>
+        <td class="nowrap">${c.date_from} ← ${c.date_to}</td><td>${c.shipments}</td>
+        ${cell(c.manual_syrian, c.actual_syrian, c.diff_syrian)}
+        ${cell(c.manual_iraqi, c.actual_iraqi, c.diff_iraqi)}
+        <td>${c.matched?'<span class="badge done">مطابق</span>'
+              :`<span class="badge warn">فرق ${money(c.diff_total)}</span>`}</td>
+        <td>${c.notes||"-"}</td>
+        <td><button class="sm danger" data-del="${c.id}">حذف</button></td>
+      </tr>`).join("")}</tbody></table>`) : empty("لا توجد مقارنات محفوظة");
+  $("#cl").querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{
+    if(!confirm("حذف هذه المقارنة؟")) return;
+    try{ await API.del("/api/mahmoud/customs/"+b.dataset.del); toast("تم الحذف"); reload(); }
+    catch(err){ toast(err.message, true); }
+  });
+  $("#peek").onclick=async()=>{
+    const f=$("#cdf").value, t=$("#cdt").value;
+    if(!f||!t){ toast("حدّد الفترة أولاً", true); return; }
+    try{
+      const a=await API.get("/api/mahmoud/customs/actual",{date_from:f, date_to:t});
+      $("#peekout").innerHTML=`<div class="kpis" style="margin-top:12px">
+        <div class="kpi"><div class="label">الرسم السوري الأصلي</div><div class="val">${money(a.syrian)}</div></div>
+        <div class="kpi"><div class="label">الرسم العراقي الأصلي</div><div class="val">${money(a.iraqi)}</div></div>
+        <div class="kpi"><div class="label">عدد الشحنات</div><div class="val">${a.count}</div></div></div>`;
+    }catch(err){ toast(err.message, true); }
+  };
+  $("#cf").addEventListener("submit",async e=>{
+    e.preventDefault();
+    const fd=Object.fromEntries(new FormData(e.target));
+    fd.manual_syrian=Number(fd.manual_syrian||0); fd.manual_iraqi=Number(fd.manual_iraqi||0);
+    try{ await API.post("/api/mahmoud/customs",fd); toast("تم حفظ المقارنة"); reload(); }
+    catch(err){ toast(err.message, true); }
+  });
 }
 
 // ---------- الأصناف (إدارة + استيراد Excel) ----------

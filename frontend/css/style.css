@@ -222,6 +222,10 @@ td .mini{font-size:10px;color:var(--muted);margin-top:2px}
 .file-btn:hover{background:var(--dteal)}
 .btn-row{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0}
 
+/* أرصدة حسابات محمود: موجب أخضر وسالب أحمر */
+td.pos{color:var(--ok)}
+td.neg{color:var(--warn)}
+
 /* حقل مشتق تلقائياً (غير قابل للتحرير) */
 input.derived{background:#eef4f9;color:var(--navy);font-weight:700;cursor:not-allowed}
 

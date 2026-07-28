@@ -13,7 +13,7 @@ from .core.database import init_db, engine
 from .core.security import hash_pw
 from .core import config
 from .models import User, ROLE_ADMIN
-from .routers import auth, shipments, accounting, admin, settings, backup
+from .routers import auth, shipments, accounting, admin, settings, backup, mahmoud
 
 app = FastAPI(title="ZOHAT — نظام الشحن والتخليص")
 
@@ -44,6 +44,7 @@ app.include_router(accounting.router)
 app.include_router(admin.router)
 app.include_router(settings.router)
 app.include_router(backup.router)
+app.include_router(mahmoud.router)
 
 
 @app.get("/healthz")
