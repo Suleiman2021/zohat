@@ -156,35 +156,90 @@ BOX_TYPES = (BOX_OFFICE, BOX_CUSTOMER, BOX_BROKER_SY, BOX_BROKER_IQ, BOX_OTHER)
 
 
 class MBox(SQLModel, table=True):
-    """صندوق: مكتب أو زبون أو مخلّص (سوري/عراقي)."""
+    """جهة محاسبية: صندوق مكتب أو زبون أو مخلّص (سوري/عراقي).
+    لا تحمل رصيداً مخزَّناً — الرصيد يُحسب دائماً من قيود دفتر الأستاذ."""
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
     box_type: str = BOX_OFFICE
-    opening_balance: float = 0.0    # رصيد افتتاحي
+    opening_balance: float = 0.0    # (مهجور) رُحِّل إلى قيد افتتاحي في الدفتر
     notes: str = ""
     is_active: bool = True
+    allow_credit: bool = False      # السماح برصيد دائن (دفعات تتجاوز المستحق)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class MEntry(SQLModel, table=True):
-    """حركة صندوق: إيراد أو مصروف بتفاصيلها."""
+    """(مهجور) حركات النظام القديم — يُحتفظ بها للترحيل فقط، ولا تُستخدم في الحساب."""
     id: Optional[int] = Field(default=None, primary_key=True)
     box_id: int = Field(index=True)
     entry_date: date
-    kind: str = "مصروف"             # إيراد / مصروف
-    category: str = ""              # البند
-    description: str = ""           # التفاصيل
+    kind: str = "مصروف"
+    category: str = ""
+    description: str = ""
     amount: float = 0.0
-    counterparty: str = ""          # الجهة/الشخص
+    counterparty: str = ""
     payment_method: str = ""
-    ref_no: str = ""                # رقم مرجعي (وصل/قيد) اختياري
+    ref_no: str = ""
     notes: str = ""
     created_by: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    migrated: bool = False          # رُحِّلت إلى دفتر الأستاذ الجديد؟
 
     @field_validator("entry_date", mode="before")
     @classmethod
     def _v_date(cls, v): return _as_date(v)
+
+
+# ---- دفتر الأستاذ: المصدر الوحيد للأرصدة (لا يُعدَّل رصيد يدوياً إطلاقاً) ----
+# الرصيد المستحق = إجمالي الاستحقاقات − (إجمالي الدفعات + إجمالي المصاريف)
+TXN_CHARGE = "استحقاق"    # يزيد الرصيد المستحق على الجهة
+TXN_PAYMENT = "دفعة"      # يُنقصه (نقد استلمه المحاسب)
+TXN_EXPENSE = "مصروف"     # يُنقصه (أنفقته الجهة نيابةً عن الشركة)
+TXN_TYPES = (TXN_CHARGE, TXN_PAYMENT, TXN_EXPENSE)
+
+# أسباب الاستحقاق (مرنة — يمكن للمحاسب كتابة سبب آخر)
+CHARGE_REASONS = ("شحنة", "عمولة", "إيراد", "تسوية", "أخرى")
+
+
+class MTxn(SQLModel, table=True):
+    """قيد في دفتر أستاذ الجهة. المبلغ دائماً موجب، والاتجاه يحدّده النوع.
+    القيود لا تُحذف — تُلغى (is_void) ويبقى أثرها في الكشف."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    party_id: int = Field(index=True)          # الجهة (صندوق/مكتب/زبون/مخلّص)
+    txn_date: date = Field(index=True)         # تاريخ العملية (يحدّده المحاسب)
+    txn_type: str = TXN_CHARGE
+    amount: float = 0.0                        # موجب دائماً
+    reason: str = ""                           # سبب الاستحقاق أو بند المصروف
+    description: str = ""
+    payment_method: str = ""
+    ref_no: str = ""                           # رقم وصل/مرجع خارجي
+    notes: str = ""
+
+    created_by: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow)   # التاريخ والوقت
+
+    is_void: bool = False                      # ملغاة؟ تُستثنى من الرصيد ويبقى سجلها
+    void_reason: str = ""
+    voided_by: str = ""
+    voided_at: Optional[datetime] = None
+
+    edited_count: int = 0
+    edited_by: str = ""
+    edited_at: Optional[datetime] = None
+
+    @field_validator("txn_date", mode="before")
+    @classmethod
+    def _v_date(cls, v): return _as_date(v)
+
+
+class MTxnAudit(SQLModel, table=True):
+    """سجل تدقيق: كل تعديل أو إلغاء لقيد يُحفظ هنا بقيمه القديمة."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    txn_id: int = Field(index=True)
+    action: str = "تعديل"                      # تعديل / إلغاء
+    changes: str = ""                          # JSON بالقيم قبل وبعد
+    by_user: str = ""
+    at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class MCustomsCheck(SQLModel, table=True):

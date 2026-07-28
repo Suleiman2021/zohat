@@ -20,7 +20,7 @@ const ROLE_LABEL = {admin:"الإدارة الشاملة", supervisor:"المش�
 
 // القوائم القابلة للإدارة — تُحمَّل من الباكند (GET /api/settings/lists) عند الدخول
 // وتُدار من صفحة «القوائم والإعدادات». القيم هنا افتراضية فقط قبل اكتمال أول تحميل.
-let CITIES=[], PTYPES=[], FINANCE=[], PAY=[], DELIVERY=[], COLLECTION=[], EXPORT_ST=[], EXPENSE_CATS=[], MCATS=[];
+let CITIES=[], PTYPES=[], FINANCE=[], PAY=[], DELIVERY=[], COLLECTION=[], EXPORT_ST=[], EXPENSE_CATS=[];
 let COMPANY={phone:"",name:"",logo:""};   // بيانات الشركة (اسم/هاتف/لوغو) — تظهر في الترويسات
 // أعمدة الطباعة المختارة من لوحة الإدارة ([] = كل الأعمدة) — تُطبَّق على كل المستخدمين
 let PRINT_COLS={invoice:[], reports:[], customs:[]};
@@ -50,7 +50,7 @@ async function loadLists(retry=true){
   if(P) PRINT_COLS=P;
   CITIES=L.cities||[]; PTYPES=L.parcel_types||[]; FINANCE=L.financing_types||[];
   PAY=L.payment_methods||[]; DELIVERY=L.delivery_statuses||[]; COLLECTION=L.collection_statuses||[];
-  EXPORT_ST=L.export_statuses||["قيد التصدير","تم التصدير"]; EXPENSE_CATS=L.expense_categories||[]; MCATS=L.mahmoud_categories||[];
+  EXPORT_ST=L.export_statuses||["قيد التصدير","تم التصدير"]; EXPENSE_CATS=L.expense_categories||[];
   return true;
 }
 
@@ -892,15 +892,24 @@ async function renderJournal(box, filters){
   load();
 }
 
-// ================= حسابات محمود (نظام محاسبي منفصل تماماً) =================
+// ============ حسابات محمود — نظام محاسبي مستقل قائم على دفتر أستاذ ============
+// المبدأ: لا يُعدَّل رصيد يدوياً. الرصيد = الاستحقاقات − (الدفعات + المصاريف).
 const BOX_TYPES=["مكتب","زبون","مخلص سوري","مخلص عراقي","أخرى"];
-const M_KIND=["مصروف","إيراد"];
+const TXN_CHARGE="استحقاق", TXN_PAYMENT="دفعة", TXN_EXPENSE="مصروف";
+const TXN_TYPES=[TXN_CHARGE,TXN_PAYMENT,TXN_EXPENSE];
+const CHARGE_REASONS=["شحنة","عمولة","إيراد","تسوية","أخرى"];
+const txnBadge=t=>({[TXN_CHARGE]:'<span class="badge pend">استحقاق ▲</span>',
+  [TXN_PAYMENT]:'<span class="badge done">دفعة ▼</span>',
+  [TXN_EXPENSE]:'<span class="badge info">مصروف ▼</span>'}[t]||t);
+// رصيد ملوّن: موجب = مستحق علينا تحصيله، سالب = رصيد دائن
+const bal=v=>`<b class="${v>0.01?'neg':(v<-0.01?'pos':'')}">${money(v)}</b>`;
 
 async function vMahmoud(){
   const v=$("#view");
   v.innerHTML=`<h1>حسابات محمود</h1>
-    <p class="hint">نظام محاسبي <b>منفصل تماماً</b> عن النظام الأساسي — كل حركة تُدخَل يدوياً
-      ولا تتأثر بالشحنات. تبويب «مقارنة الجمارك» يعرض الأرقام الأصلية للمراجعة فقط.</p>
+    <p class="hint">نظام محاسبي <b>مستقل ويدوي بالكامل</b>. الرصيد لا يُعدَّل يدوياً —
+      يُحسب دائماً: <b>الاستحقاقات − (الدفعات + المصاريف)</b>.
+      كل عملية تُسجَّل في دفتر الأستاذ ولا تُحذف (تُلغى ويبقى أثرها).</p>
     <div class="card no-print"><div class="filters">
       <label>من تاريخ<input type="date" id="mdf"></label>
       <label>إلى تاريخ<input type="date" id="mdt"></label>
@@ -909,8 +918,8 @@ async function vMahmoud(){
     </div></div>
     <div class="tabs" id="mtabs"></div>
     <div id="mtab"></div>`;
-  const TABS=[["summary","الملخّص"],["boxes","الصناديق"],["entries","الحركات"],
-              ["customs","مقارنة الجمارك"]];
+  const TABS=[["summary","الملخّص"],["parties","الجهات والأرصدة"],["entry","تسجيل عملية"],
+              ["ledger","سجل العمليات"],["customs","مقارنة الجمارك"]];
   let cur="summary";
   const period=()=>({date_from:$("#mdf").value, date_to:$("#mdt").value});
   const renderTabs=()=>{
@@ -920,13 +929,15 @@ async function vMahmoud(){
       cur=b.dataset.k; renderTabs(); body();
     });
   };
+  const go=tab=>{ cur=tab; renderTabs(); body(); };
   const body=async()=>{
     const box=$("#mtab");
     box.innerHTML=`<div class="loading"><div class="spinner"></div></div>`;
     try{
-      if(cur==="summary")      await mSummary(box, period());
-      else if(cur==="boxes")   await mBoxes(box, period(), body);
-      else if(cur==="entries") await mEntries(box, period(), body);
+      if(cur==="summary")      await mSummary(box, period(), go);
+      else if(cur==="parties") await mParties(box, period(), body, go);
+      else if(cur==="entry")   await mEntryForm(box, body, go);
+      else if(cur==="ledger")  await mLedger(box, period(), body);
       else                     await mCustoms(box, body);
     }catch(err){ box.innerHTML=`<div class="card">${empty(err.message)}</div>`; }
   };
@@ -935,178 +946,334 @@ async function vMahmoud(){
   renderTabs(); body();
 }
 
-// ----- تبويب الملخّص -----
-async function mSummary(box, period){
+// ----------------------------- الملخّص -----------------------------
+async function mSummary(box, period, go){
   const s=await API.get("/api/mahmoud/summary", period);
-  const K=[["الرصيد الافتتاحي",s.opening,""],["الإيرادات",s.income,"cash"],
-    ["المصاريف",s.expense,"cod"],["الصافي (إيراد − مصروف)",s.net,"gold"],
-    ["الرصيد الحالي",s.balance,"gold"]];
+  const K=[["إجمالي الاستحقاقات",s.charges,""],["إجمالي الدفعات المستلمة",s.payments,"cash"],
+    ["إجمالي المصاريف",s.expenses,"cash"],["صافي المسدَّد (دفعات+مصاريف)",s.settled,""],
+    ["الرصيد المتبقي",s.balance,"gold"]];
   const kpis=K.map(([l,val,c])=>
     `<div class="kpi ${c}"><div class="label">${l}</div><div class="val">${money(val)}</div></div>`).join("");
-  const byType=s.by_type.length ? wrapTable(`<table><thead><tr>
-      <th>نوع الصندوق</th><th>الرصيد الافتتاحي</th><th>الإيرادات</th><th>المصاريف</th><th>الصافي</th>
+  const types=s.by_type.length ? wrapTable(`<table><thead><tr>
+      <th>النوع</th><th>استحقاقات</th><th>دفعات</th><th>مصاريف</th><th>المتبقي</th>
     </tr></thead><tbody>${s.by_type.map(t=>`<tr><td><b>${t.type}</b></td>
-      <td>${money(t.opening)}</td><td>${money(t.income)}</td><td>${money(t.expense)}</td>
-      <td><b>${money(t.net)}</b></td></tr>`).join("")}</tbody></table>`)
-    : empty("لا توجد صناديق بعد");
-  const byCat=s.by_category.length ? wrapTable(`<table><thead><tr>
-      <th>البند</th><th>عدد الحركات</th><th>إيرادات</th><th>مصاريف</th>
-    </tr></thead><tbody>${s.by_category.map(c=>`<tr><td>${c.category}</td><td>${c.count}</td>
-      <td>${money(c.income)}</td><td>${money(c.expense)}</td></tr>`).join("")}</tbody></table>`)
-    : empty("لا توجد حركات ضمن الفترة");
+      <td>${money(t.charges)}</td><td>${money(t.payments)}</td><td>${money(t.expenses)}</td>
+      <td>${bal(t.balance)}</td></tr>`).join("")}</tbody></table>`) : empty("لا توجد بيانات");
+  const reasons=s.by_reason.length ? wrapTable(`<table><thead><tr>
+      <th>السبب / البند</th><th>عدد</th><th>استحقاقات</th><th>دفعات</th><th>مصاريف</th>
+    </tr></thead><tbody>${s.by_reason.map(r=>`<tr><td>${r.reason}</td><td>${r.count}</td>
+      <td>${money(r.charges)}</td><td>${money(r.payments)}</td><td>${money(r.expenses)}</td>
+      </tr>`).join("")}</tbody></table>`) : empty("لا توجد حركات ضمن الفترة");
+  const dues=s.outstanding.filter(o=>o.balance>0.01);
+  const creds=s.outstanding.filter(o=>o.balance<-0.01);
+  const list=(arr,cls)=>arr.length?wrapTable(`<table><thead><tr><th>الجهة</th><th>النوع</th>
+      <th>الرصيد</th><th></th></tr></thead><tbody>${arr.map(o=>`<tr>
+      <td><b>${o.name}</b></td><td>${o.type}</td><td class="${cls}"><b>${money(Math.abs(o.balance))}</b></td>
+      <td><button class="sm" data-open="${o.id}">كشف الحساب</button></td></tr>`).join("")}
+      </tbody></table>`):empty("لا يوجد");
   box.innerHTML=`<div class="card"><div class="kpis">${kpis}</div>
-      <p class="hint">${s.boxes_count} صندوق · ${s.entries_count} حركة ضمن الفترة</p></div>
-    <div class="card"><h3>حسب نوع الصندوق</h3>${byType}</div>
-    <div class="card"><h3>حسب البند</h3>${byCat}</div>`;
+      <p class="hint">${s.parties_count} جهة · ${s.txn_count} عملية ضمن الفترة ·
+        إجمالي المستحق للتحصيل <b class="neg">${money(s.outstanding_total)}</b>
+        ${s.credit_total?` · رصيد دائن <b class="pos">${money(s.credit_total)}</b>`:""}</p></div>
+    <div class="card"><h3>💰 جهات عليها مستحقات (بحاجة تحصيل)</h3>${list(dues,"neg")}</div>
+    ${creds.length?`<div class="card"><h3>↩ جهات لها رصيد دائن</h3>${list(creds,"pos")}</div>`:""}
+    <div class="card"><h3>حسب نوع الجهة</h3>${types}</div>
+    <div class="card"><h3>حسب السبب / البند</h3>${reasons}</div>`;
+  box.querySelectorAll("[data-open]").forEach(b=>b.onclick=()=>
+    mStatement(Number(b.dataset.open), go));
 }
 
-// ----- تبويب الصناديق -----
-async function mBoxes(box, period, reload){
-  const rows=await API.get("/api/mahmoud/boxes", period);
-  box.innerHTML=`<div class="card"><h3>إضافة صندوق</h3>
-      <form class="filters" id="bf">
+// ------------------------ الجهات والأرصدة ------------------------
+async function mParties(box, period, reload, go){
+  const rows=await API.get("/api/mahmoud/parties", period);
+  box.innerHTML=`<div class="card"><h3>إضافة جهة</h3>
+      <form class="filters" id="pf">
         <label>الاسم<input name="name" required placeholder="مثال: مكتب بغداد"></label>
         <label>النوع<select name="box_type">${opts(BOX_TYPES)}</select></label>
-        <label>رصيد افتتاحي ($)<input type="number" step="0.01" name="opening_balance" value="0"></label>
+        <label>رصيد افتتاحي ($)<input type="number" step="0.01" name="opening_balance" value="0"
+          placeholder="يُسجَّل كقيد افتتاحي"></label>
         <label>ملاحظات<input name="notes"></label>
-        <button class="primary">إضافة صندوق</button>
-      </form></div>
-    <div class="card"><h3>الصناديق ورصيد كل منها</h3><div id="bl"></div></div>`;
+        <button class="primary">إضافة</button>
+      </form>
+      <p class="hint">الرصيد الافتتاحي يتحوّل إلى قيد شفّاف في دفتر الأستاذ — لا يُخزَّن كرقم يدوي.</p></div>
+    <div class="card"><h3>الجهات وأرصدتها</h3><div id="pl"></div></div>`;
+
   const grouped={};
   rows.forEach(r=>(grouped[r.box_type]=grouped[r.box_type]||[]).push(r));
-  $("#bl").innerHTML = rows.length ? Object.entries(grouped).map(([type,list])=>`
+  $("#pl").innerHTML = rows.length ? Object.entries(grouped).map(([type,list])=>`
       <h3 class="sub">${type} <span class="count-badge">${list.length}</span></h3>
-      ${wrapTable(`<table><thead><tr><th>الصندوق</th><th>افتتاحي</th><th>إيرادات</th>
-        <th>مصاريف</th><th>الرصيد</th><th>حركات</th><th>الحالة</th><th>إجراءات</th></tr></thead>
-        <tbody>${list.map(b=>`<tr data-row="${b.id}">
-          <td><b>${b.name}</b>${b.notes?`<div class="mini">${b.notes}</div>`:''}</td>
-          <td>${money(b.opening_balance)}</td><td>${money(b.income)}</td>
-          <td>${money(b.expense)}</td>
-          <td class="${b.balance<0?'neg':'pos'}"><b>${money(b.balance)}</b></td>
-          <td>${b.entries_count}</td>
-          <td>${b.is_active?'<span class="badge done">نشط</span>':'<span class="badge pend">موقوف</span>'}</td>
-          <td class="nowrap"><button class="sm" data-edit="${b.id}">تعديل</button>
-            <button class="sm danger" data-del="${b.id}">حذف</button></td></tr>`).join("")}
-        </tbody></table>`)}`).join("") : empty("لا توجد صناديق — أضف صندوقاً للبدء");
+      ${wrapTable(`<table><thead><tr>
+        <th>الجهة</th><th>المطلوب</th><th>المدفوع</th><th>المصاريف</th><th>المتبقي</th>
+        <th>آخر دفعة</th><th>تاريخها</th><th>عدد الدفعات</th><th>الحالة</th><th>إجراءات</th>
+      </tr></thead><tbody>${list.map(p=>`<tr data-row="${p.id}">
+        <td><b>${p.name}</b>${p.notes?`<div class="mini">${p.notes}</div>`:''}
+          ${p.allow_credit?'<div class="mini">يسمح برصيد دائن</div>':''}</td>
+        <td>${money(p.charges)}</td><td>${money(p.payments)}</td><td>${money(p.expenses)}</td>
+        <td>${bal(p.balance)}</td>
+        <td>${p.last_payment?money(p.last_payment):"-"}</td>
+        <td class="nowrap">${p.last_payment_date||"-"}</td>
+        <td>${p.payments_count}</td>
+        <td>${p.is_settled?'<span class="badge done">مسدَّد</span>'
+             :(p.is_credit?'<span class="badge info">دائن</span>':'<span class="badge pend">مستحق</span>')}
+          ${p.is_active?'':'<div class="mini">موقوفة</div>'}</td>
+        <td class="nowrap"><button class="sm primary" data-stmt="${p.id}">كشف الحساب</button>
+          <button class="sm" data-edit="${p.id}">تعديل</button>
+          <button class="sm danger" data-del="${p.id}">حذف</button></td>
+      </tr>`).join("")}</tbody></table>`)}`).join("") : empty("لا توجد جهات — أضف جهة للبدء");
 
-  $("#bf").addEventListener("submit",async e=>{
+  $("#pf").addEventListener("submit",async e=>{
     e.preventDefault();
     const fd=Object.fromEntries(new FormData(e.target));
     fd.opening_balance=Number(fd.opening_balance||0);
-    try{ await API.post("/api/mahmoud/boxes",fd); toast("تمت إضافة الصندوق"); reload(); }
+    try{ await API.post("/api/mahmoud/parties",fd); toast("تمت إضافة الجهة"); reload(); }
     catch(err){ toast(err.message, true); }
   });
-  $("#bl").querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{
-    if(!confirm("حذف هذا الصندوق؟")) return;
-    try{ await API.del("/api/mahmoud/boxes/"+b.dataset.del); toast("تم الحذف"); reload(); }
+  $("#pl").querySelectorAll("[data-stmt]").forEach(b=>b.onclick=()=>
+    mStatement(Number(b.dataset.stmt), go));
+  $("#pl").querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{
+    if(!confirm("حذف هذه الجهة؟")) return;
+    try{ await API.del("/api/mahmoud/parties/"+b.dataset.del); toast("تم الحذف"); reload(); }
     catch(err){ toast(err.message, true); }
   });
-  $("#bl").querySelectorAll("[data-edit]").forEach(btn=>btn.onclick=()=>{
-    const b=rows.find(x=>String(x.id)===btn.dataset.edit); if(!b) return;
-    const tr=$("#bl").querySelector(`tr[data-row="${b.id}"]`);
-    tr.innerHTML=`<td><input class="cell-in" data-f="name" value="${escAttr(b.name)}"></td>
-      <td><input class="cell-in" data-f="opening_balance" type="number" step="0.01" value="${b.opening_balance}"></td>
-      <td colspan="2"><select class="cell-in" data-f="box_type">${opts(BOX_TYPES,b.box_type)}</select></td>
-      <td colspan="2"><input class="cell-in" data-f="notes" value="${escAttr(b.notes)}" placeholder="ملاحظات"></td>
+  $("#pl").querySelectorAll("[data-edit]").forEach(btn=>btn.onclick=()=>{
+    const p=rows.find(x=>String(x.id)===btn.dataset.edit); if(!p) return;
+    const tr=$("#pl").querySelector(`tr[data-row="${p.id}"]`);
+    tr.innerHTML=`<td><input class="cell-in" data-f="name" value="${escAttr(p.name)}"></td>
+      <td colspan="3"><select class="cell-in" data-f="box_type">${opts(BOX_TYPES,p.box_type)}</select></td>
+      <td colspan="3"><input class="cell-in" data-f="notes" value="${escAttr(p.notes)}" placeholder="ملاحظات"></td>
+      <td><select class="cell-in" data-f="allow_credit">
+        <option value="0" ${!p.allow_credit?'selected':''}>لا رصيد دائن</option>
+        <option value="1" ${p.allow_credit?'selected':''}>يسمح بدائن</option></select></td>
       <td><select class="cell-in" data-f="is_active">
-        <option value="1" ${b.is_active?'selected':''}>نشط</option>
-        <option value="0" ${!b.is_active?'selected':''}>موقوف</option></select></td>
+        <option value="1" ${p.is_active?'selected':''}>نشطة</option>
+        <option value="0" ${!p.is_active?'selected':''}>موقوفة</option></select></td>
       <td class="nowrap"><button class="sm primary" data-save>حفظ</button>
         <button class="sm" data-cancel>إلغاء</button></td>`;
     tr.querySelector("[data-cancel]").onclick=reload;
     tr.querySelector("[data-save]").onclick=async()=>{
       const patch={};
       tr.querySelectorAll(".cell-in").forEach(i=>patch[i.dataset.f]=i.value);
-      patch.opening_balance=Number(patch.opening_balance||0);
       patch.is_active = patch.is_active==="1";
-      try{ await API.put("/api/mahmoud/boxes/"+b.id, patch); toast("تم التعديل"); reload(); }
+      patch.allow_credit = patch.allow_credit==="1";
+      try{ await API.put("/api/mahmoud/parties/"+p.id, patch); toast("تم التعديل"); reload(); }
       catch(err){ toast(err.message, true); }
     };
   });
 }
 
-// ----- تبويب الحركات -----
-async function mEntries(box, period, reload){
-  const [boxes, rows] = await Promise.all([
-    API.get("/api/mahmoud/boxes"),
-    API.get("/api/mahmoud/entries", period),
-  ]);
-  const boxOpts=cur=>boxes.map(b=>
-    `<option value="${b.id}" ${String(b.id)===String(cur)?'selected':''}>${b.name} — ${b.box_type}</option>`).join("");
-  box.innerHTML=`<div class="card"><h3>إضافة حركة</h3>
-      ${boxes.length?`<form class="grid" id="ef">
-        <label>التاريخ<input type="date" name="entry_date" value="${today()}" required></label>
-        <label>الصندوق<select name="box_id" required>${boxOpts()}</select></label>
-        <label>النوع<select name="kind">${opts(M_KIND)}</select></label>
-        <label>البند<input name="category" list="mcats" placeholder="اختر أو اكتب"></label>
-        <datalist id="mcats">${MCATS.map(c=>`<option value="${c}">`).join("")}</datalist>
-        <label>المبلغ ($)<input type="number" step="0.01" name="amount" required></label>
-        <label>الجهة/الشخص<input name="counterparty"></label>
-        <label>التفاصيل<input name="description" placeholder="شرح الحركة"></label>
-        <label>طريقة الدفع<input name="payment_method"></label>
-        <label>رقم مرجعي<input name="ref_no" placeholder="وصل/قيد"></label>
-        <label>ملاحظات<input name="notes"></label>
-        <div style="grid-column:1/-1"><button class="primary">إضافة الحركة</button></div>
-      </form>`:empty("أضف صندوقاً أولاً من تبويب «الصناديق»")}</div>
-    <div class="card"><h3>الحركات <span class="count-badge">${rows.length}</span></h3>
-      <div class="filters no-print">
-        <label>الصندوق<select id="fbox"><option value="">الكل</option>${boxOpts()}</select></label>
-        <label>النوع<select id="fkind">${optsWithAll(M_KIND)}</select></label>
-        <label>بحث<input id="fq" placeholder="بند/تفاصيل/جهة"></label>
-        <button class="sm" id="fgo">تصفية</button>
-        <button class="sm" id="exl">⬇ تصدير Excel</button>
+// ------------------- كشف حساب جهة (نافذة كاملة) -------------------
+async function mStatement(pid, go){
+  const v=$("#view");
+  v.innerHTML=`<div class="loading"><div class="spinner"></div></div>`;
+  const d=await API.get(`/api/mahmoud/parties/${pid}/statement`);
+  const p=d.party, t=d.totals;
+  const K=[["إجمالي المطلوب",t.charges,""],["إجمالي المدفوع",t.payments,"cash"],
+    ["إجمالي المصاريف",t.expenses,"cash"],["الرصيد المتبقي",t.balance,"gold"]];
+  v.innerHTML=`<h1>كشف حساب: ${p.name}</h1>
+    <div class="card no-print"><div class="btn-row">
+      <button class="sm" id="back">← رجوع</button>
+      <button class="sm" id="pr">🖨 طباعة</button>
+      <button class="sm" id="xl">⬇ تصدير Excel</button>
+      <button class="primary" id="newTxn">＋ تسجيل عملية لهذه الجهة</button>
+    </div></div>
+    <div class="only-print">${brandHead()}</div>
+    <div class="card"><h3>${p.name} <span class="count-badge">${p.box_type}</span></h3>
+      <div class="kpis">${K.map(([l,val,c])=>
+        `<div class="kpi ${c}"><div class="label">${l}</div><div class="val">${money(val)}</div></div>`).join("")}
+        <div class="kpi"><div class="label">عدد الدفعات</div><div class="val">${t.payments_count}</div></div>
+        <div class="kpi"><div class="label">آخر دفعة</div><div class="val">${t.last_payment?money(t.last_payment):"—"}</div>
+          ${t.last_payment_date?`<div class="mini">${t.last_payment_date}</div>`:""}</div>
       </div>
-      <div id="el"></div></div>`;
+      <p class="hint">الرصيد = الاستحقاقات (${money(t.charges)}) −
+        [الدفعات (${money(t.payments)}) + المصاريف (${money(t.expenses)})] =
+        <b>${money(t.balance)}</b></p></div>
+    <div class="card"><h3>كشف الحساب مرتّباً بالتاريخ</h3><div id="lg"></div></div>`;
 
-  const paint=list=>{
-    const inc=list.filter(e=>e.kind==="إيراد").reduce((a,e)=>a+e.amount,0);
-    const exp=list.filter(e=>e.kind!=="إيراد").reduce((a,e)=>a+e.amount,0);
-    $("#el").innerHTML = list.length ? `
-      <div class="kpis" style="margin-bottom:12px">
-        <div class="kpi cash"><div class="label">إيرادات</div><div class="val">${money(inc)}</div></div>
-        <div class="kpi cod"><div class="label">مصاريف</div><div class="val">${money(exp)}</div></div>
-        <div class="kpi gold"><div class="label">الصافي</div><div class="val">${money(inc-exp)}</div></div>
-      </div>
-      ${wrapTable(`<table><thead><tr><th>التاريخ</th><th>الصندوق</th><th>النوع</th><th>البند</th>
-        <th>التفاصيل</th><th>الجهة</th><th>المبلغ</th><th>الدفع</th><th>مرجع</th><th>المُدخِل</th><th></th>
-        </tr></thead><tbody>${list.map(e=>`<tr>
-          <td>${e.entry_date}</td><td>${e.box_name}</td>
-          <td>${e.kind==="إيراد"?'<span class="badge done">إيراد</span>':'<span class="badge pend">مصروف</span>'}</td>
-          <td>${e.category||"-"}</td><td>${e.description||"-"}</td><td>${e.counterparty||"-"}</td>
-          <td><b>${money(e.amount)}</b></td><td>${e.payment_method||"-"}</td><td>${e.ref_no||"-"}</td>
-          <td class="mini">${e.created_by||"-"}</td>
-          <td><button class="sm danger" data-del="${e.id}">حذف</button></td>
-        </tr>`).join("")}</tbody></table>`)}` : empty("لا توجد حركات مطابقة");
-    $("#el").querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{
-      if(!confirm("حذف هذه الحركة؟")) return;
-      try{ await API.del("/api/mahmoud/entries/"+b.dataset.del); toast("تم الحذف"); reload(); }
-      catch(err){ toast(err.message, true); }
-    });
-  };
-  let shown=rows; paint(shown);
+  $("#back").onclick=()=>{ vMahmoud(); };
+  $("#pr").onclick=()=>printDoc("portrait");
+  $("#newTxn").onclick=()=>mTxnDialog(pid, p.name, ()=>mStatement(pid, go));
+  $("#xl").onclick=()=>exportXlsx([
+      ["txn_date","التاريخ",r=>r.txn_date],["created_at_time","الوقت",r=>r.created_at_time],
+      ["id","رقم العملية",r=>r.id],["txn_type","نوع الحركة",r=>r.txn_type],
+      ["reason","السبب/البند",r=>r.reason||"-"],["description","التفاصيل",r=>r.description||"-"],
+      ["amount","القيمة",r=>r.amount],
+      ["balance_before","الرصيد قبل",r=>r.balance_before??""],
+      ["balance_after","الرصيد بعد",r=>r.balance_after??""],
+      ["created_by","المستخدم",r=>r.created_by||"-"],["notes","ملاحظات",r=>r.notes||"-"],
+    ], d.ledger, "mstmt", `كشف حساب ${p.name}`);
 
-  $("#fgo").onclick=async()=>{
-    shown=await API.get("/api/mahmoud/entries",{...period, box_id:$("#fbox").value,
-      kind:$("#fkind").value, q:$("#fq").value});
-    paint(shown);
-  };
-  $("#exl").onclick=()=>exportXlsx([
-      ["entry_date","التاريخ",r=>r.entry_date],["box_name","الصندوق",r=>r.box_name],
-      ["kind","النوع",r=>r.kind],["category","البند",r=>r.category||"-"],
-      ["description","التفاصيل",r=>r.description||"-"],["counterparty","الجهة",r=>r.counterparty||"-"],
-      ["amount","المبلغ",r=>r.amount],["payment_method","الدفع",r=>r.payment_method||"-"],
-      ["ref_no","مرجع",r=>r.ref_no||"-"],["created_by","المُدخِل",r=>r.created_by||"-"],
-    ], shown, "mahmoud", "حسابات محمود — الحركات");
-  if($("#ef")) $("#ef").addEventListener("submit",async e=>{
-    e.preventDefault();
-    const fd=Object.fromEntries(new FormData(e.target));
-    fd.amount=Number(fd.amount||0); fd.box_id=Number(fd.box_id);
-    try{ await API.post("/api/mahmoud/entries",fd); toast("تمت إضافة الحركة"); reload(); }
-    catch(err){ toast(err.message, true); }
+  $("#lg").innerHTML = d.ledger.length ? wrapTable(`<table><thead><tr>
+      <th>التاريخ</th><th>الوقت</th><th>رقم</th><th>نوع الحركة</th><th>السبب/البند</th>
+      <th>التفاصيل</th><th>القيمة</th><th>الرصيد قبل</th><th>الرصيد بعد</th>
+      <th>المستخدم</th><th>ملاحظات</th><th class="no-print"></th>
+    </tr></thead><tbody>${d.ledger.map(r=>`<tr class="${r.is_void?'void-row':''}">
+      <td class="nowrap">${r.txn_date}</td><td class="mini">${r.created_at_time}</td>
+      <td>${r.id}</td><td class="nowrap">${txnBadge(r.txn_type)}</td>
+      <td>${r.reason||"-"}</td><td>${r.description||"-"}</td>
+      <td><b>${r.signed_amount>0?"+":""}${money(r.signed_amount)}</b></td>
+      <td>${r.is_void?"—":money(r.balance_before)}</td>
+      <td>${r.is_void?"—":`<b>${money(r.balance_after)}</b>`}</td>
+      <td class="mini">${r.created_by||"-"}</td>
+      <td>${r.notes||"-"}${r.is_void?`<div class="mini">ملغاة: ${r.void_reason||"—"} (${r.voided_by||""})</div>`:""}
+        ${r.edited_count?`<div class="mini">عُدِّلت ${r.edited_count} مرة</div>`:""}</td>
+      <td class="no-print nowrap">${r.is_void?'<span class="badge pend">ملغاة</span>'
+        :`<button class="sm" data-edit="${r.id}">تعديل</button>
+          <button class="sm danger" data-void="${r.id}">إلغاء</button>`}</td>
+    </tr>`).join("")}</tbody></table>`) : empty("لا توجد حركات بعد");
+
+  $("#lg").querySelectorAll("[data-void]").forEach(b=>b.onclick=async()=>{
+    const reason=prompt("سبب الإلغاء (اختياري):","");
+    if(reason===null) return;
+    try{ await API.post(`/api/mahmoud/txn/${b.dataset.void}/void`,{reason});
+      toast("أُلغي القيد — بقي في الكشف للمراجعة"); mStatement(pid, go);
+    }catch(err){ toast(err.message, true); }
+  });
+  $("#lg").querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>{
+    const r=d.ledger.find(x=>String(x.id)===b.dataset.edit);
+    mTxnDialog(pid, p.name, ()=>mStatement(pid, go), r);
   });
 }
 
-// ----- تبويب مقارنة الجمارك (عرض فقط — لا يعدّل النظام الأساسي) -----
+// --------------- نافذة تسجيل/تعديل عملية (حوار) ---------------
+async function mTxnDialog(pid, pname, done, existing){
+  const isEdit=!!existing;
+  const v=$("#view");
+  const parties = pid ? null : await API.get("/api/mahmoud/parties");
+  v.innerHTML=`<h1>${isEdit?`تعديل العملية رقم ${existing.id}`:"تسجيل عملية"}</h1>
+    <div class="card"><form class="grid" id="tf">
+      ${pid?`<label>الجهة<input value="${escAttr(pname)}" readonly class="derived"></label>`
+           :`<label>الجهة<select name="party_id" required>${
+              parties.map(p=>`<option value="${p.id}">${p.name} — ${p.box_type} (متبقٍ ${money(p.balance)})</option>`).join("")
+             }</select></label>`}
+      <label>نوع العملية<select name="txn_type" id="tt" ${isEdit?'disabled':''}>
+        ${opts(TXN_TYPES, existing?existing.txn_type:TXN_CHARGE)}</select></label>
+      <label>التاريخ<input type="date" name="txn_date" value="${existing?existing.txn_date:today()}" required></label>
+      <label>المبلغ ($)<input type="number" step="0.01" name="amount" required
+        value="${existing?existing.amount:""}"></label>
+      <label id="reasonWrap">السبب / البند
+        <input name="reason" list="mreasons" value="${existing?escAttr(existing.reason):""}"
+          placeholder="شحنة / عمولة / إيراد / تسوية..."></label>
+      <datalist id="mreasons">${CHARGE_REASONS.map(r=>`<option value="${r}">`).join("")}</datalist>
+      <label>التفاصيل<input name="description" value="${existing?escAttr(existing.description):""}"></label>
+      <label>طريقة الدفع<input name="payment_method" value="${existing?escAttr(existing.payment_method):""}"></label>
+      <label>رقم مرجعي (وصل)<input name="ref_no" value="${existing?escAttr(existing.ref_no):""}"></label>
+      <label>ملاحظات<input name="notes" value="${existing?escAttr(existing.notes):""}"></label>
+      <div style="grid-column:1/-1" class="btn-row">
+        <button class="primary" type="submit">${isEdit?"حفظ التعديل":"حفظ العملية"}</button>
+        <button class="sm" type="button" id="cancel">رجوع</button></div>
+    </form>
+    <p class="hint" id="effect"></p></div>`;
+
+  const effect=()=>{
+    const t=$("#tt").value;
+    $("#effect").innerHTML = t===TXN_CHARGE
+      ? "▲ <b>استحقاق</b>: يزيد المبلغ المطلوب من هذه الجهة (شحنة، عمولة، إيراد، تسوية...)."
+      : (t===TXN_PAYMENT
+        ? "▼ <b>دفعة</b>: نقد استلمه المحاسب من الجهة — يُنقص المستحق عليها."
+        : "▼ <b>مصروف</b>: أنفقته الجهة نيابةً عن الشركة — يُعامَل كسداد غير نقدي فيُنقص المستحق.");
+    $("#reasonWrap").querySelector("input").placeholder =
+      t===TXN_CHARGE ? "شحنة / عمولة / إيراد / تسوية..." : "بند المصروف أو ملاحظة الدفعة";
+  };
+  $("#tt").onchange=effect; effect();
+  $("#cancel").onclick=done;
+  $("#tf").addEventListener("submit",async e=>{
+    e.preventDefault();
+    const fd=Object.fromEntries(new FormData(e.target));
+    fd.amount=Number(fd.amount||0);
+    try{
+      if(isEdit){ await API.put(`/api/mahmoud/txn/${existing.id}`, fd); toast("تم حفظ التعديل"); }
+      else{
+        fd.party_id = pid || Number(fd.party_id);
+        fd.txn_type = $("#tt").value;
+        const r=await API.post("/api/mahmoud/txn", fd);
+        toast(`تم التسجيل — الرصيد الجديد ${money(r.party_balance)}`);
+      }
+      done();
+    }catch(err){ toast(err.message, true); }
+  });
+}
+
+// ------------------ تبويب تسجيل عملية (اختيار الجهة) ------------------
+async function mEntryForm(box, reload, go){
+  const parties=await API.get("/api/mahmoud/parties");
+  if(!parties.length){ box.innerHTML=`<div class="card">${empty("أضف جهة أولاً من تبويب «الجهات والأرصدة»")}</div>`; return; }
+  box.innerHTML=`<div class="card"><h3>تسجيل عملية جديدة</h3>
+      <p class="hint">اختر الجهة ثم نوع العملية. النظام يحدّث الرصيد تلقائياً — لا تعديل يدوي للأرصدة.</p>
+      <div id="quick"></div></div>`;
+  $("#quick").innerHTML=wrapTable(`<table><thead><tr><th>الجهة</th><th>النوع</th>
+      <th>المتبقي</th><th>إجراءات</th></tr></thead><tbody>${parties.map(p=>`<tr>
+      <td><b>${p.name}</b></td><td>${p.box_type}</td><td>${bal(p.balance)}</td>
+      <td class="nowrap"><button class="sm primary" data-new="${p.id}" data-n="${escAttr(p.name)}">＋ عملية</button>
+        <button class="sm" data-stmt="${p.id}">كشف الحساب</button></td></tr>`).join("")}
+    </tbody></table>`);
+  $("#quick").querySelectorAll("[data-new]").forEach(b=>b.onclick=()=>
+    mTxnDialog(Number(b.dataset.new), b.dataset.n, ()=>go("entry")));
+  $("#quick").querySelectorAll("[data-stmt]").forEach(b=>b.onclick=()=>
+    mStatement(Number(b.dataset.stmt), go));
+}
+
+// ---------------------- سجل العمليات العام ----------------------
+async function mLedger(box, period, reload){
+  const parties=await API.get("/api/mahmoud/parties");
+  box.innerHTML=`<div class="card no-print"><h3>تصفية سجل العمليات</h3>
+      <div class="filters">
+        <label>الجهة<select id="lp"><option value="">الكل</option>${
+          parties.map(p=>`<option value="${p.id}">${p.name} — ${p.box_type}</option>`).join("")}</select></label>
+        <label>نوع الحركة<select id="lt">${optsWithAll(TXN_TYPES)}</select></label>
+        <label>المستخدم<input id="lu" placeholder="اسم المستخدم"></label>
+        <label>بحث<input id="lq" placeholder="سبب/تفاصيل/مرجع"></label>
+        <label class="chk-inline"><input type="checkbox" id="lv" checked> إظهار الملغاة</label>
+        <button class="primary" id="lgo">تصفية</button>
+        <button class="sm" id="lxl">⬇ تصدير Excel</button>
+        <button class="sm" id="lpr">🖨 طباعة</button>
+      </div></div>
+    <div class="only-print">${brandHead()}</div>
+    <div class="card"><div id="lout"></div></div>`;
+  let shown=[];
+  const load=async()=>{
+    const d=await API.get("/api/mahmoud/ledger",{...period,
+      party_id:$("#lp").value, txn_type:$("#lt").value,
+      by_user:$("#lu").value, q:$("#lq").value,
+      include_void:$("#lv").checked?"true":"false"});
+    shown=d.rows;
+    const t=d.totals;
+    $("#lout").innerHTML=`<div class="kpis" style="margin-bottom:12px">
+        <div class="kpi"><div class="label">استحقاقات</div><div class="val">${money(t.charges)}</div></div>
+        <div class="kpi cash"><div class="label">دفعات</div><div class="val">${money(t.payments)}</div></div>
+        <div class="kpi cash"><div class="label">مصاريف</div><div class="val">${money(t.expenses)}</div></div>
+        <div class="kpi gold"><div class="label">صافي الرصيد</div><div class="val">${money(t.balance)}</div></div>
+        <div class="kpi"><div class="label">عدد العمليات</div><div class="val">${d.count}</div></div>
+      </div>
+      ${d.rows.length ? wrapTable(`<table><thead><tr>
+        <th>التاريخ</th><th>الوقت</th><th>رقم</th><th>نوع الحركة</th><th>الجهة</th>
+        <th>السبب/البند</th><th>القيمة</th><th>الرصيد قبل</th><th>الرصيد بعد</th>
+        <th>المستخدم</th><th>ملاحظات</th>
+      </tr></thead><tbody>${d.rows.map(r=>`<tr class="${r.is_void?'void-row':''}">
+        <td class="nowrap">${r.txn_date}</td><td class="mini">${r.created_at_time}</td>
+        <td>${r.id}</td><td class="nowrap">${txnBadge(r.txn_type)}</td>
+        <td><b>${r.party_name}</b></td><td>${r.reason||"-"}</td>
+        <td><b>${r.signed_amount>0?"+":""}${money(r.signed_amount)}</b></td>
+        <td>${r.is_void?"—":money(r.balance_before)}</td>
+        <td>${r.is_void?"—":money(r.balance_after)}</td>
+        <td class="mini">${r.created_by||"-"}</td>
+        <td>${r.description||r.notes||"-"}${r.is_void?'<div class="mini">ملغاة</div>':""}</td>
+      </tr>`).join("")}</tbody></table>`) : empty("لا توجد عمليات مطابقة")}`;
+  };
+  $("#lgo").onclick=load;
+  $("#lpr").onclick=()=>printDoc("landscape");
+  $("#lxl").onclick=()=>exportXlsx([
+      ["txn_date","التاريخ",r=>r.txn_date],["created_at_time","الوقت",r=>r.created_at_time],
+      ["id","رقم العملية",r=>r.id],["txn_type","نوع الحركة",r=>r.txn_type],
+      ["party_name","الجهة",r=>r.party_name],["reason","السبب/البند",r=>r.reason||"-"],
+      ["description","التفاصيل",r=>r.description||"-"],["signed_amount","القيمة",r=>r.signed_amount],
+      ["balance_before","الرصيد قبل",r=>r.balance_before??""],
+      ["balance_after","الرصيد بعد",r=>r.balance_after??""],
+      ["created_by","المستخدم",r=>r.created_by||"-"],["notes","ملاحظات",r=>r.notes||"-"],
+    ], shown, "mledger", "سجل عمليات حسابات محمود");
+  load();
+}
+
+// ---------- مقارنة الجمارك (كما هي — عرض فقط، لا تعدّل النظام الأساسي) ----------
 async function mCustoms(box, reload){
   const rows=await API.get("/api/mahmoud/customs");
   box.innerHTML=`<div class="card"><h3>مقارنة جديدة</h3>

@@ -50,6 +50,12 @@ _MIGRATIONS = {
     "item": [
         ("iraqi_per_ton", "FLOAT DEFAULT 0"),
     ],
+    "mbox": [
+        ("allow_credit", "INTEGER DEFAULT 0"),
+    ],
+    "mentry": [
+        ("migrated", "INTEGER DEFAULT 0"),
+    ],
 }
 
 # أعمدة قديمة تُحذف (استُبدلت بأخرى) — تجاهل الخطأ إن كانت محذوفة أصلاً

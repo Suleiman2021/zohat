@@ -222,9 +222,12 @@ td .mini{font-size:10px;color:var(--muted);margin-top:2px}
 .file-btn:hover{background:var(--dteal)}
 .btn-row{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0}
 
-/* أرصدة حسابات محمود: موجب أخضر وسالب أحمر */
-td.pos{color:var(--ok)}
-td.neg{color:var(--warn)}
+/* حسابات محمود: أرصدة ملوّنة وقيود ملغاة */
+td.pos,b.pos{color:var(--ok)}
+td.neg,b.neg{color:var(--warn)}
+.badge.info{background:#e8f1fb;color:var(--dteal)}
+tr.void-row td{opacity:.5;text-decoration:line-through}
+tr.void-row td:last-child{text-decoration:none;opacity:.8}
 
 /* حقل مشتق تلقائياً (غير قابل للتحرير) */
 input.derived{background:#eef4f9;color:var(--navy);font-weight:700;cursor:not-allowed}

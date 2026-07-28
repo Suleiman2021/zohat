@@ -66,6 +66,10 @@ def seed():
         from .calc import upgrade_superseded_formulas
         if upgrade_superseded_formulas(db):
             print("[ok] تمت ترقية معادلة مصروف الطرفين إلى الإدخال اليدوي")
+        # ترحيل حسابات محمود إلى دفتر الأستاذ الجديد (مرة واحدة)
+        moved = mahmoud.migrate_legacy(db)
+        if moved:
+            print(f"[ok] رُحِّل {moved} قيداً في حسابات محمود إلى دفتر الأستاذ")
 
 
 def _backup_scheduler():
