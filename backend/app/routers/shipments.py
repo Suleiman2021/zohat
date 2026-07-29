@@ -120,11 +120,19 @@ def list_shipments(db: Session = Depends(get_session), user: User = Depends(any_
 
 
 @router.get("/invoice")
-def customer_invoice(receiver: str, db: Session = Depends(get_session),
-                     user: User = Depends(any_role),
+def customer_invoice(db: Session = Depends(get_session), user: User = Depends(any_role),
+                     receiver: Optional[str] = None, sender: Optional[str] = None,
                      date_from: Optional[str] = None, date_to: Optional[str] = None):
-    """فاتورة الزبون: كل شحنات مستلِم واحد + ملخص الدفع (المستحق يُحصَّل من المستلِم عند التسليم)."""
-    q = select(Shipment).where(Shipment.receiver_name == receiver)
+    """فاتورة الزبون — بالمستلِم أو بالمرسِل (يُحدَّد بحسب ما بحث به المستخدم)."""
+    receiver = (receiver or "").strip()
+    sender = (sender or "").strip()
+    if not receiver and not sender:
+        raise HTTPException(400, "حدّد اسم المستلِم أو اسم المرسِل")
+    q = select(Shipment)
+    if receiver:
+        q = q.where(Shipment.receiver_name == receiver)
+    if sender:
+        q = q.where(Shipment.sender_name == sender)
     q = _visible(user, q)
     if date_from: q = q.where(Shipment.ship_date >= date_from)
     if date_to: q = q.where(Shipment.ship_date <= date_to)

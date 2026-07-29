@@ -245,29 +245,114 @@ async function vShipments(){
        <label>إلى تاريخ<input type="date" id="dt"></label>
        <label>جهة الاستلام<select id="tc">${optsWithAll(CITIES)}</select></label>
        <label>صاحب الشحنة (المستلِم)<input id="snd" placeholder="اسم جزئي"></label>
+       <label>المرسِل<input id="sfrom" placeholder="اسم جزئي"></label>
        <button class="primary" id="go">بحث</button>
        ${API.role!=="accountant"?'<button class="primary gold" id="add">＋ شحنة جديدة</button>':''}
      </div>
+     <div id="drill"></div>
      <div id="exportbar"></div>
      <div id="tbl"></div>
    </div>`;
   let tab="قيد التصدير";
-  const load=async()=>{
+  let drill={y:null, m:null, d:null};      // تنقّل المصدَّرة: سنة ← شهر ← يوم
+
+  const anyFilter=()=>[$("#df").value,$("#dt").value,$("#tc").value,
+                       $("#snd").value.trim(),$("#sfrom").value.trim()].some(Boolean);
+  const load=async(fromSearch)=>{
     const params={date_from:$("#df").value,date_to:$("#dt").value,
-      to_city:$("#tc").value,receiver:$("#snd").value};
+      to_city:$("#tc").value,receiver:$("#snd").value,sender:$("#sfrom").value};
     if(tab) params.export_status=tab;
     if(isBranch) params.from_city=API.branch;   // صفحة الاستلام تعرض ما أنشأه الفرع فقط
     const rows=await API.get("/api/shipments", params);
-    renderShip(rows, tab, load);
+    // تبويب «مصدّرة» يُعرض كمجلدات (سنة/شهر/يوم) — إلا عند البحث فيظهر الجدول مباشرةً
+    if(tab===EXPORTED && !(fromSearch && anyFilter())){
+      renderExportedDrill(rows, drill, load);
+    }else{
+      $("#drill").innerHTML="";
+      renderShip(rows, tab, ()=>load(fromSearch));
+    }
   };
   $("#seg").querySelectorAll(".seg-btn").forEach(b=>b.onclick=()=>{
     tab=b.dataset.tab;
+    drill={y:null, m:null, d:null};           // ابدأ من مستوى السنوات عند تبديل التبويب
     $("#seg").querySelectorAll(".seg-btn").forEach(x=>x.classList.toggle("active",x===b));
     load();
   });
-  $("#go").onclick=load;
+  $("#go").onclick=()=>load(true);
   if($("#add")) $("#add").onclick=()=>shipForm(vShipments);
   load();
+}
+
+// تاريخ التصنيف: تاريخ التصدير، وإن غاب فتاريخ الشحنة
+const expDate = r => (r.export_date || r.ship_date || "");
+const MONTH_AR=["يناير","فبراير","مارس","أبريل","مايو","يونيو",
+                "يوليو","أغسطس","سبتمبر","أكتوبر","نوفمبر","ديسمبر"];
+
+// عرض الشحنات المصدَّرة كمجلدات: سنة ← شهر ← يوم ← الجدول
+function renderExportedDrill(rows, drill, reload){
+  const box=$("#drill"), tbl=$("#tbl"), bar=$("#exportbar");
+  bar.innerHTML=""; tbl.innerHTML="";
+  if(!rows.length){ box.innerHTML=""; tbl.innerHTML=empty("لا توجد شحنات مصدَّرة"); return; }
+
+  const parts=r=>{ const [y,m,d]=expDate(r).split("-"); return {y,m,d}; };
+  const crumb=()=>{
+    const items=[`<button class="crumb" data-lvl="root">📁 كل السنوات</button>`];
+    if(drill.y) items.push(`<button class="crumb" data-lvl="y">${drill.y}</button>`);
+    if(drill.m) items.push(`<button class="crumb" data-lvl="m">${MONTH_AR[+drill.m-1]} ${drill.y}</button>`);
+    if(drill.d) items.push(`<span class="crumb cur">${drill.d} ${MONTH_AR[+drill.m-1]} ${drill.y}</span>`);
+    return `<div class="crumbs">${items.join('<span class="sep">‹</span>')}</div>`;
+  };
+  // بطاقات مستوى واحد: [القيمة المعروضة، العدد، مفتاح التنقّل]
+  const cards=(list, label)=>`<div class="folders">${list.map(([key,label2,count])=>
+      `<button class="folder" data-k="${key}">
+        <span class="fi">📁</span><span class="fname">${label2}</span>
+        <span class="fcount">${count} شحنة</span></button>`).join("")}</div>
+    <p class="hint">${label}</p>`;
+
+  const group=(arr, keyFn)=>{
+    const m={}; arr.forEach(r=>{ const k=keyFn(r); if(k) (m[k]=m[k]||[]).push(r); });
+    return m;
+  };
+
+  let html=crumb(), level;
+  if(!drill.y){
+    const g=group(rows, r=>parts(r).y);
+    level=Object.keys(g).sort().reverse().map(y=>[y, y, g[y].length]);
+    html+=cards(level, "اختر السنة لعرض شهورها");
+  }else if(!drill.m){
+    const g=group(rows.filter(r=>parts(r).y===drill.y), r=>parts(r).m);
+    level=Object.keys(g).sort().reverse().map(m=>[m, MONTH_AR[+m-1], g[m].length]);
+    html+=cards(level, `شهور سنة ${drill.y} — اختر شهراً لعرض أيامه`);
+  }else if(!drill.d){
+    const g=group(rows.filter(r=>{const p=parts(r); return p.y===drill.y && p.m===drill.m;}),
+                  r=>parts(r).d);
+    level=Object.keys(g).sort().reverse().map(d=>[d, `يوم ${d}`, g[d].length]);
+    html+=cards(level, `أيام ${MONTH_AR[+drill.m-1]} ${drill.y} — اختر يوماً لعرض شحناته`);
+  }
+  box.innerHTML=html;
+
+  // النقر على مجلد ينزل مستوى واحداً
+  box.querySelectorAll(".folder").forEach(b=>b.onclick=()=>{
+    if(!drill.y) drill.y=b.dataset.k;
+    else if(!drill.m) drill.m=b.dataset.k;
+    else drill.d=b.dataset.k;
+    reload();
+  });
+  // فتات الخبز للرجوع لأي مستوى
+  box.querySelectorAll(".crumb[data-lvl]").forEach(b=>b.onclick=()=>{
+    const l=b.dataset.lvl;
+    if(l==="root") { drill.y=drill.m=drill.d=null; }
+    else if(l==="y") { drill.m=drill.d=null; }
+    else { drill.d=null; }
+    reload();
+  });
+
+  // وصلنا مستوى اليوم → اعرض جدول شحنات ذلك اليوم
+  if(drill.d){
+    const day=rows.filter(r=>{const p=parts(r);
+      return p.y===drill.y && p.m===drill.m && p.d===drill.d;});
+    renderShip(day, EXPORTED, reload);
+  }
 }
 function renderShip(rows, tab, load){
   const bar=$("#exportbar"); bar.innerHTML="";
@@ -664,44 +749,56 @@ async function vDeliver(){
   });
 }
 
-// ---------- فاتورة الزبون (بحث باسم المستلِم — هو من يُحصَّل منه عند التسليم) ----------
+// ---------- فاتورة الزبون (بالمستلِم أو بالمرسِل — العنوان يتبع ما بحث به المستخدم) ----------
 async function vInvoice(){
   const v=$("#view"); v.innerHTML=`<h1>فاتورة الزبون</h1>
     <div class="card no-print"><div class="filters">
-      <label>اسم المستلِم<input id="recv" list="custs" placeholder="اكتب اسم المستلِم"></label>
-      <datalist id="custs"></datalist>
+      <label>اسم المستلِم<input id="recv" list="rcusts" placeholder="اكتب اسم المستلِم"></label>
+      <datalist id="rcusts"></datalist>
+      <label>اسم المرسِل<input id="sndr" list="scusts" placeholder="اكتب اسم المرسِل"></label>
+      <datalist id="scusts"></datalist>
       <label>من تاريخ<input type="date" id="if"></label>
       <label>إلى تاريخ<input type="date" id="it"></label>
       <button class="primary" id="go">عرض الفاتورة</button>
       <button class="sm" id="pr">🖨 طباعة</button>
       <button class="sm" id="ixl">⬇ تصدير Excel</button>
-    </div></div>
+    </div>
+    <p class="hint">ابحث باسم المستلِم أو باسم المرسِل — وعنوان الفاتورة يتبع ما بحثت به.</p></div>
     <div id="inv"></div>`;
   let invRows=[], invName="";
-  $("#recv").addEventListener("input",async e=>{
-    if(e.target.value.length<1)return;
-    const rows=await API.get("/api/shipments",{receiver:e.target.value});
-    const names=[...new Set(rows.map(r=>r.receiver_name))];
-    $("#custs").innerHTML=names.map(n=>`<option value="${n}">`).join("");
+  // اقتراحات الأسماء أثناء الكتابة
+  const suggest=(inputId, listId, key)=>$("#"+inputId).addEventListener("input",async e=>{
+    if(e.target.value.length<1) return;
+    const rows=await API.get("/api/shipments",{[key]:e.target.value});
+    const names=[...new Set(rows.map(r=>r[key+"_name"]))].filter(Boolean);
+    $("#"+listId).innerHTML=names.map(n=>`<option value="${n}">`).join("");
   });
+  suggest("recv","rcusts","receiver"); suggest("sndr","scusts","sender");
   $("#pr").onclick=()=>printDoc("portrait");
   $("#ixl").onclick=()=>exportXlsx(INVOICE_COLS, invRows, "invoice",
     invName?`فاتورة ${invName}`:"فاتورة الزبون");
   $("#go").onclick=async()=>{
-    const receiver=$("#recv").value.trim();
-    if(!receiver){ $("#inv").innerHTML="<p>الرجاء كتابة اسم المستلِم.</p>"; return; }
-    const data=await API.get("/api/shipments/invoice",{receiver,date_from:$("#if").value,date_to:$("#it").value});
-    invRows=data.rows; invName=receiver;
-    $("#inv").innerHTML=invoiceHtml(receiver, data);
+    const receiver=$("#recv").value.trim(), sender=$("#sndr").value.trim();
+    if(!receiver && !sender){
+      $("#inv").innerHTML=`<div class="card">${empty("اكتب اسم المستلِم أو اسم المرسِل")}</div>`; return;
+    }
+    const data=await API.get("/api/shipments/invoice",
+      {receiver, sender, date_from:$("#if").value, date_to:$("#it").value});
+    invRows=data.rows;
+    // العنوان يتبع ما بحث به المستخدم؛ وإن بحث بالاثنين يُذكران معاً
+    const party = receiver && sender ? `${receiver} / ${sender}` : (receiver || sender);
+    const label = receiver && sender ? "المستلِم والمرسِل" : (receiver ? "المستلِم" : "المرسِل");
+    invName=party;
+    $("#inv").innerHTML=invoiceHtml(party, label, data);
   };
 }
-function invoiceHtml(receiver, data){
+function invoiceHtml(party, label, data){
   const rows=data.rows;
   const table = rows.length ? colsTable(INVOICE_COLS, rows, PRINT_COLS.invoice)
-    : empty("لا توجد شحنات لهذا المستلِم ضمن الفترة المحددة");
+    : empty("لا توجد شحنات مطابقة ضمن الفترة المحددة");
   return `<div class="card invoice-sheet">
     ${brandHead()}
-    <h2>فاتورة الزبون (المستلِم): ${receiver}</h2>
+    <h2>فاتورة الزبون (${label}): ${party}</h2>
     ${table}
     <p class="hint no-print">الرسوم = الرسم السوري الفعلي + الرسم العراقي الفعلي + مصروف طرفين.</p>
     <div class="kpis" style="margin-top:14px">
@@ -720,6 +817,7 @@ async function vReports(){
      <label>جهة الإرسال<select id="rfc">${optsWithAll(CITIES)}</select></label>
      <label>جهة الاستلام<select id="rtc">${optsWithAll(CITIES)}</select></label>
      <label>صاحب الشحنة (المستلِم)<input id="rsnd" placeholder="اسم جزئي"></label>
+     <label>المرسِل<input id="rsfrom" placeholder="اسم جزئي"></label>
      <label>تمويل البضاعة<select id="rfin">${optsWithAll(FINANCE)}</select></label>
      <label>دفع الأجور<select id="rfp">${optsWithAll(PAY)}</select></label>
      <label>حالة الجمركة<select id="rcs">${optsWithAll(CUSTOMS_ST)}</select></label>
@@ -738,7 +836,8 @@ async function vReports(){
   $("#go").onclick=async()=>{
     const rows=await API.get("/api/shipments",{
       date_from:$("#rdf").value, date_to:$("#rdt").value, from_city:$("#rfc").value,
-      to_city:$("#rtc").value, receiver:$("#rsnd").value, financing:$("#rfin").value,
+      to_city:$("#rtc").value, receiver:$("#rsnd").value, sender:$("#rsfrom").value,
+      financing:$("#rfin").value,
       fees_payment:$("#rfp").value, customs_status:$("#rcs").value,
       delivery_status:$("#rds").value, collection_status:$("#rcol").value});
     // الترتيب الأبجدي يسري على الشاشة والطباعة وتصدير Excel معاً
