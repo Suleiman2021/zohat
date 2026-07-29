@@ -288,11 +288,10 @@ const expDate = r => (r.export_date || r.ship_date || "");
 const MONTH_AR=["يناير","فبراير","مارس","أبريل","مايو","يونيو",
                 "يوليو","أغسطس","سبتمبر","أكتوبر","نوفمبر","ديسمبر"];
 
-// عرض الشحنات المصدَّرة كمجلدات: سنة ← شهر ← يوم ← الجدول
-function renderExportedDrill(rows, drill, reload){
-  const box=$("#drill"), tbl=$("#tbl"), bar=$("#exportbar");
-  bar.innerHTML=""; tbl.innerHTML="";
-  if(!rows.length){ box.innerHTML=""; tbl.innerHTML=empty("لا توجد شحنات مصدَّرة"); return; }
+// ===== تصفّح هرمي عام بالمجلدات (سنة ← شهر ← يوم) =====
+// box: حاوية المجلدات، drill: {y,m,d} حالة التنقّل، onLeaf(dayRows): ماذا يُعرض عند اختيار يوم
+function renderDrill(box, rows, drill, reload, onLeaf, emptyMsg){
+  if(!rows.length){ box.innerHTML=`<div class="card">${empty(emptyMsg||"لا توجد بيانات")}</div>`; return; }
 
   const parts=r=>{ const [y,m,d]=expDate(r).split("-"); return {y,m,d}; };
   const crumb=()=>{
@@ -347,12 +346,19 @@ function renderExportedDrill(rows, drill, reload){
     reload();
   });
 
-  // وصلنا مستوى اليوم → اعرض جدول شحنات ذلك اليوم
+  // وصلنا مستوى اليوم → سلّم صفوف ذلك اليوم لمن يعرضها
   if(drill.d){
     const day=rows.filter(r=>{const p=parts(r);
       return p.y===drill.y && p.m===drill.m && p.d===drill.d;});
-    renderShip(day, EXPORTED, reload);
+    onLeaf(day);
   }
+}
+
+// غلاف خاص بسجل الشحنات: المجلدات ثم جدول الشحنات
+function renderExportedDrill(rows, drill, reload){
+  $("#exportbar").innerHTML=""; $("#tbl").innerHTML="";
+  renderDrill($("#drill"), rows, drill, reload,
+    day=>renderShip(day, EXPORTED, reload), "لا توجد شحنات مصدَّرة");
 }
 function renderShip(rows, tab, load){
   const bar=$("#exportbar"); bar.innerHTML="";
@@ -825,24 +831,29 @@ async function vReports(){
      <label>حالة التحصيل<select id="rcol">${optsWithAll(COLLECTION)}</select></label>
      <label class="chk-inline"><input type="checkbox" id="ralpha"> ترتيب أبجدي حسب المستلِم</label>
      <button class="primary" id="go">بحث</button>
+     <button class="sm" id="rfold">📁 عرض بمجلدات الصادرة</button>
      <button class="sm" id="rpr">🖨 طباعة</button>
      <button class="sm" id="exp">⬇ تصدير Excel</button>
-   </div></div>
+   </div>
+   <p class="hint" id="rmode"></p></div>
    <div class="only-print">${brandHead()}<h2 class="print-title">تقرير الشحنات</h2></div>
+   <div id="rdrill" class="no-print"></div>
    <div id="rk" class="kpis"></div>
    <div class="card"><div id="rtbl"></div></div>`;
   $("#rpr").onclick=()=>printDoc("landscape");
-  let lastRows=[];
-  $("#go").onclick=async()=>{
-    const rows=await API.get("/api/shipments",{
-      date_from:$("#rdf").value, date_to:$("#rdt").value, from_city:$("#rfc").value,
-      to_city:$("#rtc").value, receiver:$("#rsnd").value, sender:$("#rsfrom").value,
-      financing:$("#rfin").value,
-      fees_payment:$("#rfp").value, customs_status:$("#rcs").value,
-      delivery_status:$("#rds").value, collection_status:$("#rcol").value});
-    // الترتيب الأبجدي يسري على الشاشة والطباعة وتصدير Excel معاً
-    if($("#ralpha").checked)
-      rows.sort((a,b)=>(a.receiver_name||"").localeCompare(b.receiver_name||"","ar"));
+  let lastRows=[], folderMode=false, drill={y:null,m:null,d:null};
+
+  const filters=()=>({
+    date_from:$("#rdf").value, date_to:$("#rdt").value, from_city:$("#rfc").value,
+    to_city:$("#rtc").value, receiver:$("#rsnd").value, sender:$("#rsfrom").value,
+    financing:$("#rfin").value, fees_payment:$("#rfp").value,
+    customs_status:$("#rcs").value, delivery_status:$("#rds").value,
+    collection_status:$("#rcol").value});
+
+  // يعرض المؤشرات والجدول لمجموعة صفوف (مع الترتيب الأبجدي إن كان مفعّلاً)
+  const paint=rows=>{
+    if($("#ralpha").checked)   // يسري على الشاشة والطباعة وتصدير Excel معاً
+      rows=[...rows].sort((a,b)=>(a.receiver_name||"").localeCompare(b.receiver_name||"","ar"));
     lastRows=rows;
     const owners=new Set(rows.map(r=>r.receiver_name));   // صاحب الشحنة = المستلِم
     const sum=k=>rows.reduce((a,r)=>a+(Number(r[k])||0),0);
@@ -857,8 +868,33 @@ async function vReports(){
     $("#rk").innerHTML=K.map(([l,val])=>`<div class="kpi"><div class="label">${l}</div><div class="val">${val}</div></div>`).join("");
     $("#rtbl").innerHTML=reportsTable(rows);
   };
+  const clearOut=()=>{ $("#rk").innerHTML=""; $("#rtbl").innerHTML=""; lastRows=[]; };
+
+  const load=async()=>{
+    const params=filters();
+    if(folderMode) params.export_status=EXPORTED;   // المجلدات للشحنات الصادرة
+    const rows=await API.get("/api/shipments", params);
+    if(!folderMode){
+      $("#rdrill").innerHTML=""; $("#rmode").textContent="";
+      paint(rows); return;
+    }
+    // وضع المجلدات: الفلاتر تُطبَّق قبل التجميع، فتعرض المجلدات المطابق فقط
+    $("#rmode").innerHTML="📁 <b>وضع المجلدات</b> — الفلاتر أعلاه مُطبَّقة على المجلدات. "+
+      "اختر السنة ثم الشهر ثم اليوم لعرض تقرير ذلك اليوم.";
+    clearOut();
+    renderDrill($("#rdrill"), rows, drill, load, paint,
+      "لا توجد شحنات صادرة مطابقة للفلاتر");
+  };
+
+  $("#go").onclick=()=>{ drill={y:null,m:null,d:null}; load(); };
+  $("#rfold").onclick=()=>{
+    folderMode=!folderMode; drill={y:null,m:null,d:null};
+    $("#rfold").textContent = folderMode ? "📋 عرض كجدول" : "📁 عرض بمجلدات الصادرة";
+    $("#rfold").classList.toggle("primary", folderMode);
+    load();
+  };
   $("#exp").onclick=()=>exportXlsx(REPORT_COLS, lastRows, "reports", "تقرير الشحنات");
-  $("#go").click();
+  load();
 }
 
 // ---------- الحسابات (تبويبات) ----------
