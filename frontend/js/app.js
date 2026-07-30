@@ -842,6 +842,60 @@ function invoiceHtml(party, label, data){
     </div></div>`;
 }
 
+// لوحة «تفاصيل أكثر» في التقارير — ستّ مجموعات تفكّك المجاميع الكبرى إلى بنودها
+function detailPanels(rows){
+  if(!rows || !rows.length) return empty("لا توجد بيانات");
+  const sum=(k,filter)=>(filter?rows.filter(filter):rows)
+    .reduce((a,r)=>a+(Number(r[k])||0),0);
+  // بطاقة: العنوان، القيمة، صنف لوني اختياري
+  const card=(l,v,c="")=>`<div class="kpi ${c}"><div class="label">${l}</div>
+    <div class="val">${money(v)}</div></div>`;
+  const grp=(title,cards,note="")=>`<h3 class="sub">${title}</h3>
+    ${note?`<p class="hint">${note}</p>`:""}<div class="kpis">${cards}</div>`;
+
+  const byPay=v=>r=>r.fees_payment===v;         // حسب طريقة دفع الأجور
+  const byCol=v=>r=>r.collection_status===v;    // حسب حالة التحصيل
+  const CASH="واصل نقداً", COD="ضد الدفع";
+  const COLLECTED="تم التحصيل", NOTCOLLECTED="لم يُحصَّل";
+  // مجموع (ثمن البضاعة + العمولة) لمجموعة
+  const withComm=f=>sum("goods_price",f)+sum("commission",f);
+
+  return `
+  ${grp("١) أجور الشحن والجمركة — وتفكيكها",
+      card("إجمالي أجور الشحن والجمركة", sum("fees_total"), "gold")
+    + card("الرسم الجمركي السوري الفعلي", sum("syrian_actual"))
+    + card("الرسم الجمركي العراقي الفعلي", sum("iraqi_actual"))
+    + card("مصروف الطرفين", sum("two_party_expense"))
+    + card("الأجور الإضافية", sum("extra_fees"))
+    + card("السلفة الضريبية", sum("tax_advance"))
+    + card("رسم الإنفاق الاستهلاكي", sum("consumption_fee")),
+      "الإجمالي = السوري + العراقي + مصروف الطرفين + الأجور الإضافية + السلفة + رسم الإنفاق")}
+
+  ${grp("٢) ثمن البضاعة والعمولة",
+      card("ثمن البضاعة (بدون عمولة)", sum("goods_price"))
+    + card("عمولة الشراء", sum("commission"))
+    + card("ثمن البضاعة + العمولة", sum("goods_price")+sum("commission"), "gold"))}
+
+  ${grp("٣) أجور الشحن والجمركة حسب طريقة الدفع",
+      card("واصل نقداً", sum("fees_total", byPay(CASH)), "cash")
+    + card("ضد الدفع", sum("fees_total", byPay(COD)), "cod")
+    + card("آجل (ذمة على المرسِل)", sum("fees_total", byPay(DEFERRED)), "cod"))}
+
+  ${grp("٤) ثمن البضاعة حسب حالة التحصيل (بدون عمولة)",
+      card("تم التحصيل", sum("goods_price", byCol(COLLECTED)), "cash")
+    + card("لم يُحصَّل", sum("goods_price", byCol(NOTCOLLECTED)), "cod")
+    + card("آجل", sum("goods_price", byCol(DEFERRED)), "cod"))}
+
+  ${grp("٥) ثمن البضاعة + العمولة حسب حالة التحصيل",
+      card("تم التحصيل — الإجمالي", withComm(byCol(COLLECTED)), "cash")
+    + card("منها عمولة", sum("commission", byCol(COLLECTED)))
+    + card("لم يُحصَّل — الإجمالي", withComm(byCol(NOTCOLLECTED)), "cod")
+    + card("منها عمولة", sum("commission", byCol(NOTCOLLECTED)))
+    + card("آجل — الإجمالي", withComm(byCol(DEFERRED)), "cod")
+    + card("منها عمولة", sum("commission", byCol(DEFERRED))),
+      "كل حالة تعرض المجموع شاملاً العمولة، ثم مقدار العمولة داخله")}`;
+}
+
 // ---------- لوحة التقارير ----------
 async function vReports(){
   const v=$("#view"); v.innerHTML=`<h1>لوحة التقارير</h1>
@@ -867,9 +921,21 @@ async function vReports(){
    <div class="only-print">${brandHead()}<h2 class="print-title">تقرير الشحنات</h2></div>
    <div id="rdrill" class="no-print"></div>
    <div id="rk" class="kpis"></div>
+   <div class="card" id="rmoreCard" hidden>
+     <button class="detail-toggle" id="rmoreBtn" aria-expanded="false">
+       <span class="caret">▾</span> تفاصيل أكثر</button>
+     <div id="rmore" hidden></div>
+   </div>
    <div class="card"><div id="rtbl"></div></div>`;
   $("#rpr").onclick=()=>printDoc("landscape");
-  let lastRows=[], folderMode=false, drill={y:null,m:null,d:null};
+  let lastRows=[], folderMode=false, drill={y:null,m:null,d:null}, moreOpen=false;
+  $("#rmoreBtn").onclick=()=>{
+    moreOpen=!moreOpen;
+    $("#rmore").hidden=!moreOpen;
+    $("#rmoreBtn").setAttribute("aria-expanded", moreOpen);
+    $("#rmoreBtn").classList.toggle("open", moreOpen);
+    if(moreOpen) $("#rmore").innerHTML=detailPanels(lastRows);
+  };
 
   const filters=()=>({
     date_from:$("#rdf").value, date_to:$("#rdt").value, from_city:$("#rfc").value,
@@ -895,8 +961,13 @@ async function vReports(){
       ["المتبقي في الذمة",money(sum("remaining"))],["شحنات قيد التسليم",countIf("delivery_status","قيد التسليم")]];
     $("#rk").innerHTML=K.map(([l,val])=>`<div class="kpi"><div class="label">${l}</div><div class="val">${val}</div></div>`).join("");
     $("#rtbl").innerHTML=reportsTable(rows);
+    $("#rmoreCard").hidden = !rows.length;          // لا يظهر الزر بلا بيانات
+    if(moreOpen) $("#rmore").innerHTML=detailPanels(rows);   // يتحدّث مع كل فلترة
   };
-  const clearOut=()=>{ $("#rk").innerHTML=""; $("#rtbl").innerHTML=""; lastRows=[]; };
+  const clearOut=()=>{
+    $("#rk").innerHTML=""; $("#rtbl").innerHTML=""; lastRows=[];
+    $("#rmoreCard").hidden=true; $("#rmore").innerHTML="";
+  };
 
   const load=async()=>{
     const params=filters();

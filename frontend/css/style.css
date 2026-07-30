@@ -222,6 +222,18 @@ td .mini{font-size:10px;color:var(--muted);margin-top:2px}
 .file-btn:hover{background:var(--dteal)}
 .btn-row{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0}
 
+/* ---------- زر «تفاصيل أكثر» المنسدل ---------- */
+.detail-toggle{display:flex;align-items:center;gap:8px;width:100%;background:#eef4f9;
+  border:1px solid var(--line);border-radius:var(--radius-sm);padding:11px 14px;
+  font-weight:800;font-size:14px;color:var(--navy);cursor:pointer;
+  min-height:var(--tap);transition:background .15s,border-color .15s}
+.detail-toggle:hover{background:#e3edf6;border-color:var(--teal)}
+.detail-toggle .caret{transition:transform .2s;font-size:12px;color:var(--dteal)}
+.detail-toggle.open{background:var(--navy);color:#fff;border-color:var(--navy)}
+.detail-toggle.open .caret{transform:rotate(180deg);color:#fff}
+#rmore{margin-top:14px}
+#rmore .kpis{margin-bottom:4px}
+
 /* ---------- مجلدات الشحنات المصدَّرة (سنة ← شهر ← يوم) ---------- */
 .folders{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
   gap:12px;margin:6px 0 4px}
