@@ -6,8 +6,8 @@
 <meta name="theme-color" content="#183C60">
 <title>زوهات — نظام الشحن والتخليص</title>
 <link rel="manifest" href="manifest.json">
-<!-- ?v=38 يكسر أي كاش قديم لدى المتصفحات التي علِقت على نسخة سابقة -->
-<link rel="stylesheet" href="css/style.css?v=38">
+<!-- ?v=39 يكسر أي كاش قديم لدى المتصفحات التي علِقت على نسخة سابقة -->
+<link rel="stylesheet" href="css/style.css?v=39">
 </head>
 <body>
 <!-- شاشة الدخول -->
@@ -41,8 +41,25 @@
 <!-- إشعارات مؤقتة (toast) -->
 <div id="toasts" aria-live="polite"></div>
 
-<script src="js/api.js?v=38"></script>
-<script src="js/app.js?v=38"></script>
+<!-- شبكة أمان: أي خطأ برمجي يوقف تحميل الملفات كان يترك الشاشة صامتة تماماً
+     (لا يُربط حتى زر الدخول). هذا يُظهره بوضوح بدل الصمت. -->
+<script>
+window.addEventListener("error", e=>{
+  const m = e.message || "خطأ غير معروف";
+  let box = document.getElementById("fatalErr");
+  if(!box){
+    box = document.createElement("div");
+    box.id = "fatalErr";
+    box.style.cssText = "position:fixed;inset-inline:0;top:0;z-index:9999;background:#C0392B;"
+      + "color:#fff;padding:12px 16px;font:13px/1.6 'Segoe UI',Tahoma,sans-serif;direction:rtl;"
+      + "box-shadow:0 4px 14px rgba(0,0,0,.35)";
+    document.body && document.body.appendChild(box);
+  }
+  if(box) box.textContent = "⚠ تعذّر تحميل التطبيق: " + m + " — حدّث الصفحة، وإن تكرّر أبلغ الدعم بهذه الرسالة.";
+});
+</script>
+<script src="js/api.js?v=39"></script>
+<script src="js/app.js?v=39"></script>
 <script>
 if ('serviceWorker' in navigator)
   navigator.serviceWorker.register('sw.js').catch(()=>{});

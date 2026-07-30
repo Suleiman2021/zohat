@@ -56,6 +56,9 @@ async function loadLists(retry=true){
 
 // ---- سجلّا أعمدة الفاتورة والتقارير: [المفتاح، العنوان، دالة القيمة] ----
 const badge=(txt,ok)=>`<span class="badge ${ok?'done':'pend'}">${txt}</span>`;
+// ثمن البضاعة مجموعاً مع عمولة الشراء — ما يدفعه الزبون مقابل بضاعته.
+// يجب تعريفها قبل INVOICE_COLS لأن المصفوفة تشير إليها مباشرةً عند إنشائها.
+const goodsWithCommission = r => (Number(r.goods_price)||0) + (Number(r.commission)||0);
 const INVOICE_COLS=[
   ["ship_date","التاريخ",r=>r.ship_date],
   ["ref_no","رقم القيد",r=>r.ref_no],
@@ -74,8 +77,6 @@ const INVOICE_COLS=[
   ["extra_fees","الأجور الإضافية",r=>money(r.extra_fees)],
   ["grand_total","المجموع",r=>money(r.grand_total)],
 ];
-// ثمن البضاعة مجموعاً مع عمولة الشراء — ما يدفعه الزبون مقابل بضاعته
-const goodsWithCommission = r => (Number(r.goods_price)||0) + (Number(r.commission)||0);
 const REPORT_COLS=[
   ["ref_no","القيد",r=>r.ref_no],
   ["ship_date","التاريخ",r=>r.ship_date],
