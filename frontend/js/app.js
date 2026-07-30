@@ -66,12 +66,16 @@ const INVOICE_COLS=[
   ["count","العدد",r=>r.count],
   ["weight_kg","الوزن",r=>r.weight_kg+" كغ"],
   ["goods_value","قيمة الفاتورة",r=>money(r.goods_value)],
+  // ثمن البضاعة شاملاً عمولة الشراء (عند الشراء نيابةً عن الزبون)
+  ["goods_price","ثمن البضاعة + العمولة",r=>money(goodsWithCommission(r)), goodsWithCommission],
   ["duties_only","الرسوم",r=>money(r.duties_only)],
   ["tax_advance","السلفة الضريبية",r=>money(r.tax_advance)],
   ["consumption_fee","رسم الإنفاق",r=>money(r.consumption_fee)],
   ["extra_fees","الأجور الإضافية",r=>money(r.extra_fees)],
   ["grand_total","المجموع",r=>money(r.grand_total)],
 ];
+// ثمن البضاعة مجموعاً مع عمولة الشراء — ما يدفعه الزبون مقابل بضاعته
+const goodsWithCommission = r => (Number(r.goods_price)||0) + (Number(r.commission)||0);
 const REPORT_COLS=[
   ["ref_no","القيد",r=>r.ref_no],
   ["ship_date","التاريخ",r=>r.ship_date],
@@ -129,7 +133,10 @@ async function exportXlsx(cols, rows, view, title){
   const sel=(selectedKeys&&selectedKeys.length)?new Set(selectedKeys):null;
   const use=cols.filter(([k])=>!sel||sel.has(k));
   const headers=use.map(([,label])=>label);
-  const body=rows.map(r=>use.map(([k,,fn])=>{
+  // العنصر الرابع (اختياري) دالة تُعطي القيمة الرقمية للأعمدة المحسوبة،
+  // وإلا نأخذ الحقل الخام إن كان رقماً، وإلا نصّاً خالصاً من دالة العرض.
+  const body=rows.map(r=>use.map(([k,,fn,num])=>{
+    if(typeof num==="function") return num(r);
     const raw=r[k];
     return typeof raw==="number" ? raw : plainText(fn(r));
   }));
@@ -167,6 +174,19 @@ const optsWithAll = (arr, cur) => `<option value="">الكل</option>`+opts(arr,
 // يلفّ أي جدول بحاوية قابلة للتمرير أفقياً وعمودياً مع رأس ثابت — يمنع اختفاء الجداول الطويلة
 const wrapTable = html => `<div class="table-scroll">${html}</div>`;
 const empty = txt => `<div class="empty"><span>📭</span><p>${txt}</p></div>`;
+
+// فلترة فورية: تشغّل fn عند أي تغيير في حقول الفلاتر دون الحاجة لزر «بحث».
+// الكتابة النصية بمهلة قصيرة (debounce) كي لا نغرق الخادم بطلب لكل حرف،
+// والقوائم والتواريخ ومربعات الاختيار فوراً عند التغيير.
+function liveFilters(ids, fn, delay=350){
+  let timer=null;
+  const debounced=()=>{ clearTimeout(timer); timer=setTimeout(fn, delay); };
+  ids.forEach(id=>{
+    const el=$("#"+id); if(!el) return;
+    const isTyping = el.tagName==="INPUT" && !["checkbox","date"].includes(el.type);
+    el.addEventListener(isTyping?"input":"change", isTyping?debounced:fn);
+  });
+}
 
 // إشعار مؤقت أسفل الشاشة (بديل عن الصمت بعد الحفظ/الحذف)
 function toast(msg, isErr){
@@ -246,7 +266,7 @@ async function vShipments(){
        <label>جهة الاستلام<select id="tc">${optsWithAll(CITIES)}</select></label>
        <label>صاحب الشحنة (المستلِم)<input id="snd" placeholder="اسم جزئي"></label>
        <label>المرسِل<input id="sfrom" placeholder="اسم جزئي"></label>
-       <button class="primary" id="go">بحث</button>
+       <button class="sm" id="clr">مسح الفلاتر</button>
        ${API.role!=="accountant"?'<button class="primary gold" id="add">＋ شحنة جديدة</button>':''}
      </div>
      <div id="drill"></div>
@@ -278,7 +298,10 @@ async function vShipments(){
     $("#seg").querySelectorAll(".seg-btn").forEach(x=>x.classList.toggle("active",x===b));
     load();
   });
-  $("#go").onclick=()=>load(true);
+  const SIDS=["df","dt","tc","snd","sfrom"];
+  liveFilters(SIDS, ()=>load(true));        // فلترة فورية بلا زر بحث
+  $("#clr").onclick=()=>{ SIDS.forEach(id=>{const e=$("#"+id); if(e) e.value="";});
+    drill={y:null,m:null,d:null}; load(); };
   if($("#add")) $("#add").onclick=()=>shipForm(vShipments);
   load();
 }
@@ -291,8 +314,6 @@ const MONTH_AR=["يناير","فبراير","مارس","أبريل","مايو","
 // ===== تصفّح هرمي عام بالمجلدات (سنة ← شهر ← يوم) =====
 // box: حاوية المجلدات، drill: {y,m,d} حالة التنقّل، onLeaf(dayRows): ماذا يُعرض عند اختيار يوم
 function renderDrill(box, rows, drill, reload, onLeaf, emptyMsg){
-  if(!rows.length){ box.innerHTML=`<div class="card">${empty(emptyMsg||"لا توجد بيانات")}</div>`; return; }
-
   const parts=r=>{ const [y,m,d]=expDate(r).split("-"); return {y,m,d}; };
   const crumb=()=>{
     const items=[`<button class="crumb" data-lvl="root">📁 كل السنوات</button>`];
@@ -313,20 +334,24 @@ function renderDrill(box, rows, drill, reload, onLeaf, emptyMsg){
     return m;
   };
 
+  // شريط التنقّل يظهر دائماً — حتى حين تُخفي الفلاتر كل النتائج — كي يبقى الرجوع ممكناً
   let html=crumb(), level;
-  if(!drill.y){
+  const noMatch=`<div class="card">${empty(emptyMsg||"لا توجد بيانات مطابقة للفلاتر")}</div>`;
+  if(!rows.length){
+    html+=noMatch;
+  }else if(!drill.y){
     const g=group(rows, r=>parts(r).y);
     level=Object.keys(g).sort().reverse().map(y=>[y, y, g[y].length]);
-    html+=cards(level, "اختر السنة لعرض شهورها");
+    html+=level.length?cards(level, "اختر السنة لعرض شهورها"):noMatch;
   }else if(!drill.m){
     const g=group(rows.filter(r=>parts(r).y===drill.y), r=>parts(r).m);
     level=Object.keys(g).sort().reverse().map(m=>[m, MONTH_AR[+m-1], g[m].length]);
-    html+=cards(level, `شهور سنة ${drill.y} — اختر شهراً لعرض أيامه`);
+    html+=level.length?cards(level, `شهور سنة ${drill.y} — اختر شهراً لعرض أيامه`):noMatch;
   }else if(!drill.d){
     const g=group(rows.filter(r=>{const p=parts(r); return p.y===drill.y && p.m===drill.m;}),
                   r=>parts(r).d);
     level=Object.keys(g).sort().reverse().map(d=>[d, `يوم ${d}`, g[d].length]);
-    html+=cards(level, `أيام ${MONTH_AR[+drill.m-1]} ${drill.y} — اختر يوماً لعرض شحناته`);
+    html+=level.length?cards(level, `أيام ${MONTH_AR[+drill.m-1]} ${drill.y} — اختر يوماً لعرض شحناته`):noMatch;
   }
   box.innerHTML=html;
 
@@ -346,12 +371,9 @@ function renderDrill(box, rows, drill, reload, onLeaf, emptyMsg){
     reload();
   });
 
-  // وصلنا مستوى اليوم → سلّم صفوف ذلك اليوم لمن يعرضها
-  if(drill.d){
-    const day=rows.filter(r=>{const p=parts(r);
-      return p.y===drill.y && p.m===drill.m && p.d===drill.d;});
-    onLeaf(day);
-  }
+  // وصلنا مستوى اليوم → سلّم صفوف ذلك اليوم لمن يعرضها (قد تكون فارغة بعد تضييق الفلاتر)
+  if(drill.d) onLeaf(rows.filter(r=>{const p=parts(r);
+    return p.y===drill.y && p.m===drill.m && p.d===drill.d;}));
 }
 
 // غلاف خاص بسجل الشحنات: المجلدات ثم جدول الشحنات
@@ -527,7 +549,6 @@ async function vCustoms(){
       <label>جهة الإرسال<select id="cfc">${optsWithAll(CITIES)}</select></label>
       <label>جهة الاستلام<select id="ctc">${optsWithAll(CITIES)}</select></label>
       <label>حالة التصدير<select id="cexp">${optsWithAll(EXPORT_ST)}</select></label>
-      <button class="primary" id="cgo">بحث</button>
       <button class="sm" id="cclr">مسح الفلاتر</button>
     </div></div>
     <div class="card"><h3>بانتظار الجمركة <span class="count-badge" id="np"></span></h3><div id="pending"></div></div>
@@ -568,7 +589,7 @@ async function vCustoms(){
       customsForm(all.find(r=>String(r.id)===b.dataset.id), vCustoms);
     });
   };
-  $("#cgo").onclick=load;
+  liveFilters(["cdf","cdt","cref","crecv","csnd","citem","cfc","ctc","cexp"], load);
   $("#cclr").onclick=()=>{
     ["cdf","cdt","cref","crecv","csnd","citem"].forEach(id=>$("#"+id).value="");
     ["cfc","ctc","cexp"].forEach(id=>$("#"+id).value="");
@@ -671,7 +692,6 @@ async function vBroker(){
         <label>من تاريخ<input type="date" id="bdf"></label>
         <label>إلى تاريخ<input type="date" id="bdt"></label>
         <label>جهة الاستلام<select id="btc">${optsWithAll(CITIES)}</select></label>
-        <button class="primary" id="bgo">بحث</button>
         <button class="sm" id="bpr">🖨 طباعة كشف الجمارك</button>
         <button class="sm" id="bxl">⬇ تصدير Excel</button>
       </div>
@@ -691,7 +711,7 @@ async function vBroker(){
     $("#bseg").querySelectorAll(".seg-btn").forEach(x=>x.classList.toggle("active",x===b));
     load();
   });
-  $("#bgo").onclick=load;
+  liveFilters(["bdf","bdt","btc"], load);
   $("#bpr").onclick=()=>printDoc("landscape");
   load();
 }
@@ -783,10 +803,11 @@ async function vInvoice(){
   $("#pr").onclick=()=>printDoc("portrait");
   $("#ixl").onclick=()=>exportXlsx(INVOICE_COLS, invRows, "invoice",
     invName?`فاتورة ${invName}`:"فاتورة الزبون");
-  $("#go").onclick=async()=>{
+  const show=async(quiet)=>{
     const receiver=$("#recv").value.trim(), sender=$("#sndr").value.trim();
     if(!receiver && !sender){
-      $("#inv").innerHTML=`<div class="card">${empty("اكتب اسم المستلِم أو اسم المرسِل")}</div>`; return;
+      if(!quiet) $("#inv").innerHTML=`<div class="card">${empty("اكتب اسم المستلِم أو اسم المرسِل")}</div>`;
+      return;
     }
     const data=await API.get("/api/shipments/invoice",
       {receiver, sender, date_from:$("#if").value, date_to:$("#it").value});
@@ -797,9 +818,13 @@ async function vInvoice(){
     invName=party;
     $("#inv").innerHTML=invoiceHtml(party, label, data);
   };
+  $("#go").onclick=()=>show(false);
+  // الاسم يحتاج تطابقاً تاماً فيبقى بزر، أما التاريخان فيُحدّثان الفاتورة المعروضة فوراً
+  liveFilters(["if","it"], ()=>show(true));
 }
 function invoiceHtml(party, label, data){
   const rows=data.rows;
+  const goodsTotal=rows.reduce((a,r)=>a+goodsWithCommission(r),0);
   const table = rows.length ? colsTable(INVOICE_COLS, rows, PRINT_COLS.invoice)
     : empty("لا توجد شحنات مطابقة ضمن الفترة المحددة");
   return `<div class="card invoice-sheet">
@@ -808,6 +833,8 @@ function invoiceHtml(party, label, data){
     ${table}
     <p class="hint no-print">الرسوم = الرسم السوري الفعلي + الرسم العراقي الفعلي + مصروف طرفين.</p>
     <div class="kpis" style="margin-top:14px">
+      ${goodsTotal>0?`<div class="kpi gold"><div class="label">ثمن البضاعة + العمولة</div>
+        <div class="val">${money(goodsTotal)}</div></div>`:""}
       <div class="kpi cash"><div class="label">الواصل نقداً</div><div class="val">${money(data.summary.cash_in)}</div></div>
       <div class="kpi cod"><div class="label">المستحق ضد الدفع</div><div class="val">${money(data.summary.cod_due)}</div></div>
       <div class="kpi"><div class="label">إجمالي المبلغ</div><div class="val">${money(data.summary.grand_total)}</div></div>
@@ -830,8 +857,8 @@ async function vReports(){
      <label>حالة التسليم<select id="rds">${optsWithAll(DELIVERY)}</select></label>
      <label>حالة التحصيل<select id="rcol">${optsWithAll(COLLECTION)}</select></label>
      <label class="chk-inline"><input type="checkbox" id="ralpha"> ترتيب أبجدي حسب المستلِم</label>
-     <button class="primary" id="go">بحث</button>
      <button class="sm" id="rfold">📁 عرض بمجلدات الصادرة</button>
+     <button class="sm" id="rclr">مسح الفلاتر</button>
      <button class="sm" id="rpr">🖨 طباعة</button>
      <button class="sm" id="exp">⬇ تصدير Excel</button>
    </div>
@@ -886,7 +913,14 @@ async function vReports(){
       "لا توجد شحنات صادرة مطابقة للفلاتر");
   };
 
-  $("#go").onclick=()=>{ drill={y:null,m:null,d:null}; load(); };
+  const FIDS=["rdf","rdt","rfc","rtc","rsnd","rsfrom","rfin","rfp","rcs","rds","rcol","ralpha"];
+  // الفلترة فورية — وتبقى داخل المجلد المفتوح بدل القفز لمستوى السنوات
+  liveFilters(FIDS, load);
+  $("#rclr").onclick=()=>{
+    FIDS.forEach(id=>{ const e=$("#"+id); if(!e) return;
+      if(e.type==="checkbox") e.checked=false; else e.value=""; });
+    drill={y:null,m:null,d:null}; load();
+  };
   $("#rfold").onclick=()=>{
     folderMode=!folderMode; drill={y:null,m:null,d:null};
     $("#rfold").textContent = folderMode ? "📋 عرض كجدول" : "📁 عرض بمجلدات الصادرة";
@@ -903,7 +937,7 @@ async function vAccounting(){
     <div class="card"><div class="filters">
       <label>من<input type="date" id="af"></label><label>إلى<input type="date" id="at"></label>
       <label>الفرع<select id="ab">${optsWithAll(CITIES)}</select></label>
-      <button class="primary" id="ago">عرض</button></div></div>
+      <button class="sm" id="aclr">مسح</button></div></div>
     <div class="tabs" id="atabs"></div>
     <div id="atab"></div>`;
   const TABS=[["summary","الملخّص"],["journal","دفتر القيود"],["purchases","مشتريات نيابةً"],
@@ -930,7 +964,8 @@ async function vAccounting(){
     data=await API.get("/api/accounting/summary", filters());
     renderTabs(); renderBody();
   };
-  $("#ago").onclick=load;
+  liveFilters(["af","at","ab"], load);
+  $("#aclr").onclick=()=>{ ["af","at","ab"].forEach(id=>$("#"+id).value=""); load(); };
   load();
 }
 function accSummaryHtml(s){
@@ -1049,7 +1084,6 @@ async function vMahmoud(initialTab){
     <div class="card no-print"><div class="filters">
       <label>من تاريخ<input type="date" id="mdf"></label>
       <label>إلى تاريخ<input type="date" id="mdt"></label>
-      <button class="primary" id="mgo">عرض</button>
       <button class="sm" id="mclr">كل الفترات</button>
     </div></div>
     <div class="tabs" id="mtabs"></div>
@@ -1077,7 +1111,7 @@ async function vMahmoud(initialTab){
       else                     await mCustoms(box, body);
     }catch(err){ box.innerHTML=`<div class="card">${empty(err.message)}</div>`; }
   };
-  $("#mgo").onclick=body;
+  liveFilters(["mdf","mdt"], body);
   $("#mclr").onclick=()=>{ $("#mdf").value=""; $("#mdt").value=""; body(); };
   renderTabs(); body();
 }
@@ -1373,7 +1407,6 @@ async function mLedger(box, period, reload){
         <label>المستخدم<input id="lu" placeholder="اسم المستخدم"></label>
         <label>بحث<input id="lq" placeholder="سبب/تفاصيل/مرجع"></label>
         <label class="chk-inline"><input type="checkbox" id="lv" checked> إظهار الملغاة</label>
-        <button class="primary" id="lgo">تصفية</button>
         <button class="sm" id="lxl">⬇ تصدير Excel</button>
         <button class="sm" id="lpr">🖨 طباعة</button>
       </div></div>
@@ -1409,7 +1442,7 @@ async function mLedger(box, period, reload){
         <td>${r.description||r.notes||"-"}${r.is_void?'<div class="mini">ملغاة</div>':""}</td>
       </tr>`).join("")}</tbody></table>`) : empty("لا توجد عمليات مطابقة")}`;
   };
-  $("#lgo").onclick=load;
+  liveFilters(["lp","lt","lu","lq","lv"], load);
   $("#lpr").onclick=()=>printDoc("landscape");
   $("#lxl").onclick=()=>exportXlsx([
       ["txn_date","التاريخ",r=>r.txn_date],["created_at_time","الوقت",r=>r.created_at_time],
