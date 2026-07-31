@@ -958,7 +958,10 @@ async function vReports(){
       ["عدد الشحنات",rows.length,""],
       ["عدد الزبائن",owners.size,""],
       ["إجمالي الوزن",sum("weight_kg").toFixed(1)+" كغ",""],
-      ["إجمالي أجور الشحن والجمركة",money(sum("fees_total")),"gold"],
+      ["إجمالي أجور الشحن والجمركة",money(sum("fees_total")),""],
+      ["إجمالي ثمن البضاعة مع العمولة",money(gwc()),""],
+      // إجمالي المبلغ = أجور الشحن والجمركة + ثمن البضاعة مع العمولة
+      ["إجمالي المبلغ",money(sum("fees_total")+gwc()),"gold"],
       ["الواصل نقداً",money(sum("fees_total",r=>r.fees_payment==="واصل نقداً")
         +gwc(r=>r.collection_status==="تم التحصيل")),"cash"],
       ["ضد الدفع",money(sum("fees_total",r=>r.fees_payment==="ضد الدفع")
