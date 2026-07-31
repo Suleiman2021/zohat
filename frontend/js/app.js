@@ -950,16 +950,24 @@ async function vReports(){
       rows=[...rows].sort((a,b)=>(a.receiver_name||"").localeCompare(b.receiver_name||"","ar"));
     lastRows=rows;
     const owners=new Set(rows.map(r=>r.receiver_name));   // صاحب الشحنة = المستلِم
-    const sum=k=>rows.reduce((a,r)=>a+(Number(r[k])||0),0);
-    const countIf=(k,v)=>rows.filter(r=>r[k]===v).length;
-    const K=[["عدد الشحنات",rows.length],["عدد الزبائن",owners.size],
-      ["إجمالي الوزن",sum("weight_kg").toFixed(1)+" كغ"],["إجمالي قيمة البضاعة",money(sum("goods_value"))],
-      ["إجمالي أجور الشحن والجمركة",money(sum("fees_total"))],["إجمالي المبلغ",money(sum("grand_total"))],
-      ["الواصل نقداً",money(sum("cash_in"))],["غير الواصل (ضد الدفع)",money(sum("cod_due"))],
-      ["ذمة على المرسِل (آجل)",money(sum("sender_debt"))],
-      ["عمولة الشراء",money(sum("commission"))],["المحصَّل فعلياً (نقد)",money(sum("collected_actual"))],
-      ["المتبقي في الذمة",money(sum("remaining"))],["شحنات قيد التسليم",countIf("delivery_status","قيد التسليم")]];
-    $("#rk").innerHTML=K.map(([l,val])=>`<div class="kpi"><div class="label">${l}</div><div class="val">${val}</div></div>`).join("");
+    const sum=(k,f)=>(f?rows.filter(f):rows).reduce((a,r)=>a+(Number(r[k])||0),0);
+    // ثمن البضاعة + العمولة لمجموعة صفوف (نفس منطق «تفاصيل أكثر»)
+    const gwc=f=>sum("goods_price",f)+sum("commission",f);
+    // كل حالة = الأجور بطريقة دفعها + ثمن البضاعة والعمولة بحالة تحصيلها المقابلة
+    const K=[
+      ["عدد الشحنات",rows.length,""],
+      ["عدد الزبائن",owners.size,""],
+      ["إجمالي الوزن",sum("weight_kg").toFixed(1)+" كغ",""],
+      ["إجمالي أجور الشحن والجمركة",money(sum("fees_total")),"gold"],
+      ["الواصل نقداً",money(sum("fees_total",r=>r.fees_payment==="واصل نقداً")
+        +gwc(r=>r.collection_status==="تم التحصيل")),"cash"],
+      ["ضد الدفع",money(sum("fees_total",r=>r.fees_payment==="ضد الدفع")
+        +gwc(r=>r.collection_status==="لم يُحصَّل")),"cod"],
+      ["الآجل",money(sum("fees_total",r=>r.fees_payment===DEFERRED)
+        +gwc(r=>r.collection_status===DEFERRED)),"cod"],
+      ["إجمالي عمولة ثمن البضاعة",money(sum("commission")),""],
+    ];
+    $("#rk").innerHTML=K.map(([l,val,c])=>`<div class="kpi ${c}"><div class="label">${l}</div><div class="val">${val}</div></div>`).join("");
     $("#rtbl").innerHTML=reportsTable(rows);
     $("#rmoreCard").hidden = !rows.length;          // لا يظهر الزر بلا بيانات
     if(moreOpen) $("#rmore").innerHTML=detailPanels(rows);   // يتحدّث مع كل فلترة
@@ -1152,7 +1160,8 @@ async function vMahmoud(initialTab){
   v.innerHTML=`<h1>حسابات محمود</h1>
     <p class="hint">نظام محاسبي <b>مستقل ويدوي بالكامل</b>. الرصيد لا يُعدَّل يدوياً —
       يُحسب دائماً: <b>الاستحقاقات − (الدفعات + المصاريف)</b>.
-      كل عملية تُسجَّل في دفتر الأستاذ ولا تُحذف (تُلغى ويبقى أثرها).</p>
+      كل عملية تُسجَّل في دفتر الأستاذ — يمكن إلغاؤها (يبقى أثرها للمراجعة)
+      أو حذفها نهائياً من كشف الحساب.</p>
     <div class="card no-print"><div class="filters">
       <label>من تاريخ<input type="date" id="mdf"></label>
       <label>إلى تاريخ<input type="date" id="mdt"></label>
@@ -1161,7 +1170,7 @@ async function vMahmoud(initialTab){
     <div class="tabs" id="mtabs"></div>
     <div id="mtab"></div>`;
   const TABS=[["summary","الملخّص"],["parties","الجهات والأرصدة"],["entry","تسجيل عملية"],
-              ["ledger","سجل العمليات"],["customs","مقارنة الجمارك"]];
+              ["revenues","إيرادات الشحنات"],["ledger","سجل العمليات"],["customs","مقارنة الجمارك"]];
   let cur=TABS.some(([k])=>k===initialTab) ? initialTab : "summary";
   const period=()=>({date_from:$("#mdf").value, date_to:$("#mdt").value});
   const renderTabs=()=>{
@@ -1179,6 +1188,7 @@ async function vMahmoud(initialTab){
       if(cur==="summary")      await mSummary(box, period(), go);
       else if(cur==="parties") await mParties(box, period(), body, go);
       else if(cur==="entry")   await mEntryForm(box, body, go);
+      else if(cur==="revenues")await mRevenues(box, period());
       else if(cur==="ledger")  await mLedger(box, period(), body);
       else                     await mCustoms(box, body);
     }catch(err){ box.innerHTML=`<div class="card">${empty(err.message)}</div>`; }
@@ -1329,6 +1339,9 @@ async function mStatement(pid, fromTab){
       <p class="hint">الرصيد = الاستحقاقات (${money(t.charges)}) −
         [الدفعات (${money(t.payments)}) + المصاريف (${money(t.expenses)})] =
         <b>${money(t.balance)}</b></p></div>
+    ${["مكتب","زبون"].includes(p.box_type)?`<div class="card no-print">
+      <h3>⚡ الاستحقاقات التلقائية من الشحنات الصادرة</h3>
+      <div id="ac"><div class="loading"><div class="spinner"></div></div></div></div>`:""}
     <div class="card"><h3>كشف الحساب مرتّباً بالتاريخ</h3><div id="lg"></div></div>`;
 
   $("#back").onclick=()=>vMahmoud(fromTab||"parties");
@@ -1358,9 +1371,12 @@ async function mStatement(pid, fromTab){
       <td class="mini">${r.created_by||"-"}</td>
       <td>${r.notes||"-"}${r.is_void?`<div class="mini">ملغاة: ${r.void_reason||"—"} (${r.voided_by||""})</div>`:""}
         ${r.edited_count?`<div class="mini">عُدِّلت ${r.edited_count} مرة</div>`:""}</td>
-      <td class="no-print nowrap">${r.is_void?'<span class="badge pend">ملغاة</span>'
+      <td class="no-print nowrap">${r.is_void
+        ?`<span class="badge pend">ملغاة</span>
+          <button class="sm danger" data-hdel="${r.id}">🗑 حذف</button>`
         :`<button class="sm" data-edit="${r.id}">تعديل</button>
-          <button class="sm danger" data-void="${r.id}">إلغاء</button>`}</td>
+          <button class="sm danger" data-void="${r.id}">إلغاء</button>
+          <button class="sm danger" data-hdel="${r.id}">🗑 حذف</button>`}</td>
     </tr>`).join("")}</tbody></table>`) : empty("لا توجد حركات بعد");
 
   $("#lg").querySelectorAll("[data-void]").forEach(b=>b.onclick=async()=>{
@@ -1373,6 +1389,101 @@ async function mStatement(pid, fromTab){
   $("#lg").querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>{
     const r=d.ledger.find(x=>String(x.id)===b.dataset.edit);
     mTxnDialog(pid, p.name, ()=>mStatement(pid, fromTab), r);
+  });
+  // حذف نهائي — يختفي القيد من الكشف تماماً (بخلاف الإلغاء الذي يُبقي أثره)
+  $("#lg").querySelectorAll("[data-hdel]").forEach(b=>b.onclick=async()=>{
+    if(!confirm("حذف نهائي: سيختفي القيد من الكشف تماماً ولا يمكن التراجع. متابعة؟")) return;
+    try{ await API.del("/api/mahmoud/txn/"+b.dataset.hdel);
+      toast("حُذف القيد نهائياً"); mStatement(pid, fromTab);
+    }catch(err){ toast(err.message, true); }
+  });
+  if(["مكتب","زبون"].includes(p.box_type))
+    loadAutoCharges(pid, ()=>mStatement(pid, fromTab));
+}
+
+// --------- الاستحقاقات التلقائية من الشحنات الصادرة (داخل كشف الحساب) ---------
+// مكتب: ضد الدفع للأجور + ثمن البضاعة والعمولة غير المحصَّلة (شحنات وجهتها اسم المكتب).
+// زبون: الآجل للأجور + ثمن البضاعة والعمولة الآجلة (شحنات مرسِلها اسم الزبون).
+async function loadAutoCharges(pid, refresh){
+  const box=$("#ac"); if(!box) return;
+  try{
+    const d=await API.get("/api/mahmoud/auto-charges",{party_id:pid});
+    if(!d.rows.length){
+      box.innerHTML=`<p class="hint">${d.rule}.</p>
+        ${empty("لا توجد استحقاقات محسوبة من الشحنات الصادرة لهذه الجهة")}`;
+      return;
+    }
+    box.innerHTML=`<p class="hint">${d.rule}. كل استحقاق منسوب لتاريخ شحنته الصادرة،
+        والقيمة تُحسب من النظام الأساسي ولا تُسجَّل مرتين.</p>`
+      +wrapTable(`<table><thead><tr>
+        <th>تاريخ الشحنة الصادرة</th><th>عدد الشحنات</th><th>أرقام القيود</th>
+        <th>قيمة الاستحقاق</th><th>الحالة</th><th></th></tr></thead>
+      <tbody>${d.rows.map(r=>`<tr>
+        <td class="nowrap"><b>${r.export_date}</b></td><td>${r.count}</td>
+        <td class="mini">${r.refs}</td><td><b>${money(r.amount)}</b></td>
+        <td>${r.registered?'<span class="badge done">مسجَّل</span>'
+                          :'<span class="badge pend">غير مسجَّل</span>'}</td>
+        <td>${r.registered?"":`<button class="sm primary" data-reg="${r.export_date}">＋ تسجيل الاستحقاق</button>`}</td>
+      </tr>`).join("")}</tbody></table>`);
+    box.querySelectorAll("[data-reg]").forEach(b=>b.onclick=async()=>{
+      if(!confirm(`تسجيل استحقاق الشحنة الصادرة بتاريخ ${b.dataset.reg}؟`)) return;
+      try{
+        const r=await API.post("/api/mahmoud/auto-charges",{party_id:pid, export_date:b.dataset.reg});
+        toast(`سُجِّل الاستحقاق — الرصيد الجديد ${money(r.party_balance)}`); refresh();
+      }catch(err){ toast(err.message, true); }
+    });
+  }catch(err){ box.innerHTML=empty(err.message); }
+}
+
+// ------------- إيرادات الشحنات الصادرة (الإجمالي − حمزة − ماجد) -------------
+async function mRevenues(box, period){
+  const d=await API.get("/api/mahmoud/export-revenues", period);
+  const t=d.totals;
+  box.innerHTML=`<div class="card"><h3>إيرادات الشحنات الصادرة</h3>
+    <p class="hint">لكل شحنة صادرة (بتاريخ تصديرها): <b>الإجمالي</b> = أجور الشحن والجمركة +
+      ثمن البضاعة والعمولة — يُجلب تلقائياً من النظام الأساسي.
+      و<b>الإيراد</b> = الإجمالي − مصرف حمزة − مصرف ماجد (حقلان يدويان).</p>
+    <div class="kpis" style="margin-bottom:12px">
+      <div class="kpi"><div class="label">إجمالي الشحنات الصادرة</div><div class="val">${money(t.total)}</div></div>
+      <div class="kpi cash"><div class="label">مجموع مصرف حمزة</div><div class="val">${money(t.hamza)}</div></div>
+      <div class="kpi cash"><div class="label">مجموع مصرف ماجد</div><div class="val">${money(t.majed)}</div></div>
+      <div class="kpi gold"><div class="label">صافي الإيراد</div><div class="val">${money(t.revenue)}</div></div>
+    </div><div id="rv"></div></div>`;
+  if(!d.rows.length){
+    $("#rv").innerHTML=empty("لا توجد شحنات صادرة ضمن الفترة المحددة"); return;
+  }
+  $("#rv").innerHTML=wrapTable(`<table><thead><tr>
+      <th>تاريخ الشحنة الصادرة</th><th>عدد الشحنات</th><th>أجور الشحن والجمركة</th>
+      <th>ثمن البضاعة + العمولة</th><th>الإجمالي</th>
+      <th>مصرف حمزة</th><th>مصرف ماجد</th><th>الإيراد</th><th></th></tr></thead>
+    <tbody>${d.rows.map(r=>`<tr data-d="${r.export_date}">
+      <td class="nowrap"><b>${r.export_date}</b></td><td>${r.count}</td>
+      <td>${money(r.fees_total)}</td><td>${money(r.goods_with_comm)}</td>
+      <td><b>${money(r.total)}</b></td>
+      <td><input class="cell-in" type="number" step="0.01" min="0" data-h
+        value="${r.hamza_expense||""}" placeholder="0"></td>
+      <td><input class="cell-in" type="number" step="0.01" min="0" data-m
+        value="${r.majed_expense||""}" placeholder="0"></td>
+      <td data-rev><b class="${r.revenue<0?'neg':''}">${money(r.revenue)}</b></td>
+      <td><button class="sm primary" data-save>حفظ</button></td>
+    </tr>`).join("")}</tbody></table>`);
+  $("#rv").querySelectorAll("tr[data-d]").forEach(tr=>{
+    const r=d.rows.find(x=>x.export_date===tr.dataset.d); if(!r) return;
+    const h=tr.querySelector("[data-h]"), m=tr.querySelector("[data-m]");
+    // الإيراد يتحدّث فوراً أثناء الكتابة قبل الحفظ
+    const upd=()=>{
+      const rev=r.total-(Number(h.value)||0)-(Number(m.value)||0);
+      tr.querySelector("[data-rev]").innerHTML=`<b class="${rev<0?'neg':''}">${money(rev)}</b>`;
+    };
+    h.oninput=upd; m.oninput=upd;
+    tr.querySelector("[data-save]").onclick=async()=>{
+      try{
+        await API.put("/api/mahmoud/export-revenues/"+r.export_date,
+          {hamza_expense:Number(h.value)||0, majed_expense:Number(m.value)||0});
+        r.hamza_expense=Number(h.value)||0; r.majed_expense=Number(m.value)||0;
+        toast(`تم حفظ مصرفي شحنة ${r.export_date}`);
+      }catch(err){ toast(err.message, true); }
+    };
   });
 }
 

@@ -242,6 +242,22 @@ class MTxnAudit(SQLModel, table=True):
     at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class MExportRevenue(SQLModel, table=True):
+    """إيراد شحنة صادرة (بتاريخ تصدير): الإجمالي يُجلب من النظام الأساسي،
+    ويُطرح منه مصرفا حمزة وماجد (يدويان) للوصول إلى الإيراد الصافي."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    export_date: date = Field(index=True, unique=True)
+    hamza_expense: float = 0.0      # مصرف حمزة (يدوي)
+    majed_expense: float = 0.0      # مصرف ماجد (يدوي)
+    notes: str = ""
+    updated_by: str = ""
+    updated_at: Optional[datetime] = None
+
+    @field_validator("export_date", mode="before")
+    @classmethod
+    def _v_date(cls, v): return _as_date(v)
+
+
 class MCustomsCheck(SQLModel, table=True):
     """مقارنة الجمارك: مجاميع يدوية يُدخلها المحاسب لفترة، تُقارَن بالأصلية المحسوبة."""
     id: Optional[int] = Field(default=None, primary_key=True)

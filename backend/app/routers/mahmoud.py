@@ -19,10 +19,16 @@ from sqlmodel import Session, select
 
 from ..core.database import get_session
 from ..core.security import admin_or_accountant
-from ..models import (User, MBox, MEntry, MTxn, MTxnAudit, MCustomsCheck, Shipment, Item,
-                      BOX_TYPES, TXN_TYPES, TXN_CHARGE, TXN_PAYMENT, TXN_EXPENSE,
+from ..models import (User, MBox, MEntry, MTxn, MTxnAudit, MCustomsCheck, MExportRevenue,
+                      Shipment, Item,
+                      BOX_TYPES, BOX_OFFICE, BOX_CUSTOMER,
+                      TXN_TYPES, TXN_CHARGE, TXN_PAYMENT, TXN_EXPENSE,
                       CHARGE_REASONS, _as_date)
-from ..calc import compute, cfg_resolver
+from ..calc import compute, cfg_resolver, COD, DEFERRED
+
+EXPORTED = "تم التصدير"
+NOT_COLLECTED = "لم يُحصَّل"
+AUTO_REF = "تصدير:"      # بادئة المرجع للاستحقاقات المجلوبة تلقائياً (لمنع التكرار)
 
 router = APIRouter(prefix="/api/mahmoud", tags=["mahmoud"])
 
@@ -298,6 +304,22 @@ def void_txn(tid: int, payload: dict | None = None, db: Session = Depends(get_se
     return {**_txn_out(t, ""), "party_balance": _balance(db, t.party_id)}
 
 
+@router.delete("/txn/{tid}")
+def delete_txn(tid: int, db: Session = Depends(get_session),
+               user: User = Depends(admin_or_accountant)):
+    """حذف نهائي لقيد — يختفي من الكشف تماماً (بخلاف الإلغاء الذي يُبقي أثره).
+    يُسجَّل الحذف في سجل التدقيق بقيم القيد المحذوف للمراجعة."""
+    t = db.get(MTxn, tid)
+    if not t:
+        return {"ok": True}
+    _audit(db, tid, "حذف نهائي",
+           {"النوع": t.txn_type, "المبلغ": t.amount, "التاريخ": str(t.txn_date),
+            "السبب": t.reason, "التفاصيل": t.description, "الجهة": t.party_id}, user)
+    party_id = t.party_id
+    db.delete(t); db.commit()
+    return {"ok": True, "party_balance": _balance(db, party_id)}
+
+
 @router.get("/txn/{tid}/audit")
 def txn_audit(tid: int, db: Session = Depends(get_session),
               user: User = Depends(admin_or_accountant)):
@@ -417,6 +439,158 @@ def meta(user: User = Depends(admin_or_accountant)):
     """ثوابت النظام للواجهة."""
     return {"txn_types": list(TXN_TYPES), "box_types": list(BOX_TYPES),
             "charge_reasons": list(CHARGE_REASONS)}
+
+
+# ========== الاستحقاقات التلقائية من الشحنات الصادرة ==========
+def _computed_exported(db: Session):
+    """كل الشحنات الصادرة (لها تاريخ تصدير) مع أرقامها المحسوبة بنسخة معادلاتها."""
+    items = {i.name: (i.syrian_per_ton, i.iraqi_per_ton) for i in db.exec(select(Item)).all()}
+    resolve = cfg_resolver(db)
+    q = select(Shipment).where(Shipment.export_status == EXPORTED,
+                               Shipment.export_date != None)          # noqa: E711
+    for s in db.exec(q).all():
+        syr, irq = items.get(s.item_name, (0.0, 0.0))
+        c = compute(s, syr, irq, resolve(s.calc_version_id))
+        yield s, c, (s.goods_price or 0.0) + c.get("commission", 0.0)
+
+
+def _auto_rows(db: Session, p: MBox) -> list[dict]:
+    """استحقاقات الجهة حسب كل شحنة صادرة (مجمّعة بتاريخ التصدير):
+    • مكتب: ضد الدفع للأجور + ثمن البضاعة والعمولة غير المحصَّلة (شحنات وجهتها = اسم المكتب).
+    • زبون: الآجل للأجور + ثمن البضاعة والعمولة الآجلة (شحنات مرسِلها = اسم الزبون)."""
+    name = (p.name or "").strip()
+    by_date: dict[str, dict] = {}
+    for s, c, gwc in _computed_exported(db):
+        if p.box_type == BOX_OFFICE:
+            if (s.to_city or "").strip() != name:
+                continue
+            amt = (c.get("fees_total", 0.0) if s.fees_payment == COD else 0.0) \
+                + (gwc if s.collection_status == NOT_COLLECTED else 0.0)
+        else:   # زبون — الذمم الآجلة على المرسِل
+            if (s.sender_name or "").strip() != name:
+                continue
+            amt = (c.get("fees_total", 0.0) if s.fees_payment == DEFERRED else 0.0) \
+                + (gwc if s.collection_status == DEFERRED else 0.0)
+        if amt <= 0.005:
+            continue
+        d = by_date.setdefault(str(s.export_date),
+                               {"export_date": str(s.export_date), "amount": 0.0,
+                                "count": 0, "refs": []})
+        d["amount"] += amt
+        d["count"] += 1
+        d["refs"].append(s.ref_no)
+
+    # ما سُجِّل سابقاً لنفس الجهة ونفس تاريخ التصدير لا يُعرض كجديد (منع التكرار)
+    registered = {t.ref_no for t in _live(db, p.id)
+                  if t.txn_type == TXN_CHARGE and (t.ref_no or "").startswith(AUTO_REF)}
+    out = []
+    for d in sorted(by_date.values(), key=lambda x: x["export_date"], reverse=True):
+        ref = AUTO_REF + d["export_date"]
+        out.append({**d, "amount": round(d["amount"], 2), "ref_no": ref,
+                    "refs": "، ".join(str(r) for r in sorted(d["refs"])),
+                    "registered": ref in registered})
+    return out
+
+
+@router.get("/auto-charges")
+def auto_charges(party_id: int, db: Session = Depends(get_session),
+                 user: User = Depends(admin_or_accountant)):
+    p = db.get(MBox, party_id)
+    if not p:
+        raise HTTPException(404, "الجهة غير موجودة")
+    if p.box_type not in (BOX_OFFICE, BOX_CUSTOMER):
+        raise HTTPException(400, "الجلب التلقائي متاح لجهات «مكتب» و«زبون» فقط")
+    rule = ("مكتب: ضد الدفع للأجور + ثمن البضاعة والعمولة غير المحصَّلة — لشحنات وجهتها اسم المكتب"
+            if p.box_type == BOX_OFFICE else
+            "زبون: الآجل للأجور + ثمن البضاعة والعمولة الآجلة — لشحنات مرسِلها اسم الزبون")
+    return {"party": p.dict(), "rule": rule, "rows": _auto_rows(db, p)}
+
+
+@router.post("/auto-charges")
+def register_auto_charge(payload: dict, db: Session = Depends(get_session),
+                         user: User = Depends(admin_or_accountant)):
+    """تسجيل استحقاق تلقائي كقيد في دفتر الأستاذ — المبلغ يُعاد حسابه من الخادم."""
+    p = db.get(MBox, int(payload.get("party_id") or 0))
+    if not p:
+        raise HTTPException(404, "الجهة غير موجودة")
+    export_date = str(payload.get("export_date") or "").strip()
+    row = next((r for r in _auto_rows(db, p) if r["export_date"] == export_date), None)
+    if not row:
+        raise HTTPException(400, "لا يوجد استحقاق محسوب لهذه الجهة بهذا التاريخ")
+    if row["registered"]:
+        raise HTTPException(400, "هذا الاستحقاق مسجَّل مسبقاً — لن يُكرَّر")
+    t = MTxn(party_id=p.id, txn_date=_as_date(export_date) or date.today(),
+             txn_type=TXN_CHARGE, amount=row["amount"], reason="شحنة",
+             description=f"استحقاق تلقائي عن الشحنة الصادرة بتاريخ {export_date} "
+                         f"({row['count']} شحنة — قيود: {row['refs'][:200]})",
+             ref_no=row["ref_no"],
+             notes="جُلب تلقائياً من النظام الأساسي",
+             created_by=user.full_name or user.username)
+    db.add(t); db.commit(); db.refresh(t)
+    return {**_txn_out(t, p.name), "party_balance": _balance(db, p.id)}
+
+
+# ========== إيرادات الشحنات الصادرة (الإجمالي − مصرف حمزة − مصرف ماجد) ==========
+@router.get("/export-revenues")
+def export_revenues(db: Session = Depends(get_session), user: User = Depends(admin_or_accountant),
+                    date_from: Optional[str] = None, date_to: Optional[str] = None):
+    """لكل شحنة صادرة (بتاريخ تصديرها): الإجمالي = أجور الشحن والجمركة + ثمن البضاعة والعمولة،
+    والإيراد = الإجمالي − مصرف حمزة − مصرف ماجد (يدويان)."""
+    by_date: dict[str, dict] = {}
+    for s, c, gwc in _computed_exported(db):
+        k = str(s.export_date)
+        if date_from and k < date_from: continue
+        if date_to and k > date_to: continue
+        d = by_date.setdefault(k, {"export_date": k, "count": 0,
+                                   "fees_total": 0.0, "goods_with_comm": 0.0})
+        d["count"] += 1
+        d["fees_total"] += c.get("fees_total", 0.0)
+        d["goods_with_comm"] += gwc
+    saved = {str(r.export_date): r for r in db.exec(select(MExportRevenue)).all()}
+    out = []
+    for k in sorted(by_date, reverse=True):
+        d = by_date[k]
+        r = saved.get(k)
+        hamza = round(r.hamza_expense, 2) if r else 0.0
+        majed = round(r.majed_expense, 2) if r else 0.0
+        total = round(d["fees_total"] + d["goods_with_comm"], 2)
+        out.append({**d, "fees_total": round(d["fees_total"], 2),
+                    "goods_with_comm": round(d["goods_with_comm"], 2),
+                    "total": total, "hamza_expense": hamza, "majed_expense": majed,
+                    "notes": r.notes if r else "",
+                    "revenue": round(total - hamza - majed, 2),
+                    "saved": r is not None})
+    return {"rows": out,
+            "totals": {"total": round(sum(x["total"] for x in out), 2),
+                       "hamza": round(sum(x["hamza_expense"] for x in out), 2),
+                       "majed": round(sum(x["majed_expense"] for x in out), 2),
+                       "revenue": round(sum(x["revenue"] for x in out), 2)}}
+
+
+@router.put("/export-revenues/{export_date}")
+def save_export_revenue(export_date: str, payload: dict,
+                        db: Session = Depends(get_session),
+                        user: User = Depends(admin_or_accountant)):
+    d = _as_date(export_date)
+    if not d:
+        raise HTTPException(400, "تاريخ تصدير غير صحيح")
+    try:
+        hamza = round(float(payload.get("hamza_expense") or 0), 2)
+        majed = round(float(payload.get("majed_expense") or 0), 2)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "قيمة المصرف غير صحيحة")
+    if hamza < 0 or majed < 0:
+        raise HTTPException(400, "قيمة المصرف لا تكون سالبة")
+    r = db.exec(select(MExportRevenue).where(MExportRevenue.export_date == d)).first()
+    if not r:
+        r = MExportRevenue(export_date=d)
+    r.hamza_expense = hamza
+    r.majed_expense = majed
+    r.notes = (payload.get("notes") or "").strip()
+    r.updated_by = user.full_name or user.username
+    r.updated_at = datetime.utcnow()
+    db.add(r); db.commit(); db.refresh(r)
+    return r
 
 
 # ============ ترحيل بيانات النظام القديم (يُنفَّذ مرة واحدة) ============
