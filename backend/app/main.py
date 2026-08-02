@@ -1,6 +1,7 @@
 """نقطة التشغيل: uvicorn app.main:app --reload
 في الإنتاج (Railway): uvicorn app.main:app --host 0.0.0.0 --port $PORT"""
 import os
+import sys
 import threading
 import time
 from fastapi import FastAPI
@@ -14,6 +15,15 @@ from .core.security import hash_pw
 from .core import config
 from .models import User, ROLE_ADMIN
 from .routers import auth, shipments, accounting, admin, settings, backup, mahmoud
+
+# رسائل الإقلاع عربية — على ويندوز قد تكون الطرفية بترميز لا يدعم العربية (cp1256)
+# فتُسقط print الخادمَ كلياً عند البدء. نجعل المخرجات UTF-8 مع استبدال ما يتعذّر عرضه.
+for _stream in (sys.stdout, sys.stderr):
+    if _stream and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 app = FastAPI(title="ZOHAT — نظام الشحن والتخليص")
 

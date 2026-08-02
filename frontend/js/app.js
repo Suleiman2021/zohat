@@ -1843,10 +1843,19 @@ async function vLists(){
       <p class="hint" id="bkStatus">جارٍ التحقق من إعدادات النسخ الاحتياطي…</p>
       <div class="btn-row">
         <button class="primary" id="bkNow">📤 نسخة احتياطية الآن (إلى تلغرام)</button>
-        <button class="sm" id="bkDl">⬇ تنزيل ملف Excel لكل الشحنات</button>
+        <button class="primary" id="bkLocal">💻 تنزيل نسخة كاملة محلياً (قاعدة + Excel)</button>
+        <button class="sm" id="bkDl">⬇ ملف Excel فقط</button>
       </div>
       <p class="hint">النسخة تُرسل قاعدة البيانات + ملف Excel لسجلات الشحنات إلى تلغرام تلقائياً كل ٢٤ ساعة،
-        وتُحفظ البيانات على قرص Railway الدائم. لتفعيل تلغرام اضبط المتغيّرات في Railway (انظر ملف .env.example).</p>
+        وتُحفظ البيانات على قرص Railway الدائم. زر «تنزيل محلياً» يحفظ الملفين على جهازك مباشرة.
+        ملف قاعدة البيانات (.sqlite) يحوي <b>النظام بالكامل</b>: الشحنات، المستخدمين، المعادلات،
+        حسابات محمود، الإعدادات واللوغو — ويكفي وحده لاسترجاع كل شيء.</p>
+      <div class="btn-row" style="margin-top:10px">
+        <input type="file" id="bkFile" accept=".sqlite,.db" hidden>
+        <button class="sm danger" id="bkRestore">↩ استرجاع قاعدة البيانات من نسخة</button>
+      </div>
+      <p class="hint">الاسترجاع يستبدل <b>كل</b> البيانات الحالية بمحتوى النسخة المرفوعة (بعد فحص سلامتها)،
+        مع أخذ نسخة أمان تلقائية من الوضع الحالي قبل الاستبدال.</p>
     </div>
     <p class="hint">إدارة القيم المستخدمة في كل القوائم المنسدلة بالمشروع. القيم المؤمَّنة 🔒 تُستخدم داخل
     منطق الحسابات (calc.py) فلا يمكن حذفها أو تعديلها — لكن يمكن إضافة قيم جديدة بجانبها بحرية.</p>
@@ -1864,6 +1873,34 @@ async function vLists(){
   };
   $("#bkDl").onclick=()=>API.download("/api/backup/download",{},"zohat_shipments.xlsx")
     .catch(err=>toast(err.message,true));
+  // تنزيل محلي كامل: قاعدة البيانات (تحوي كل النظام) + ملف Excel للشحنات
+  $("#bkLocal").onclick=async()=>{
+    const b=$("#bkLocal"); b.disabled=true; b.textContent="جارٍ التنزيل…";
+    const d=new Date().toISOString().slice(0,10);
+    try{
+      await API.download("/api/backup/db",{},`zohat_db_${d}.sqlite`);
+      await API.download("/api/backup/download",{},`zohat_shipments_${d}.xlsx`);
+      toast("نُزِّلت قاعدة البيانات وملف Excel على جهازك");
+    }catch(err){ toast(err.message,true); }
+    b.disabled=false; b.textContent="💻 تنزيل نسخة كاملة محلياً (قاعدة + Excel)";
+  };
+  // استرجاع نسخة: اختيار ملف ← تأكيد صريح ← رفع ← إعادة تحميل التطبيق
+  $("#bkRestore").onclick=()=>$("#bkFile").click();
+  $("#bkFile").onchange=async e=>{
+    const f=e.target.files[0]; e.target.value="";
+    if(!f) return;
+    if(!confirm(`استرجاع النسخة «${f.name}»؟\n\nسيتم استبدال كل البيانات الحالية بمحتوى هذه النسخة!\nتُؤخذ نسخة أمان تلقائية من الوضع الحالي قبل الاستبدال.`)) return;
+    const b=$("#bkRestore"); b.disabled=true; b.textContent="جارٍ الاسترجاع…";
+    try{
+      const r=await API.upload("/api/backup/restore", f);
+      alert(`تم الاسترجاع بنجاح ✅\nالشحنات: ${r.shipments} — المستخدمون: ${r.users}`+
+        (r.safety_copy?`\nنسخة الأمان: ${r.safety_copy}`:""));
+      location.reload();   // إعادة تحميل كاملة — البيانات كلها تغيّرت
+    }catch(err){
+      toast(err.message,true);
+      b.disabled=false; b.textContent="↩ استرجاع قاعدة البيانات من نسخة";
+    }
+  };
   $("#cf").addEventListener("submit",async e=>{
     e.preventDefault();
     try{

@@ -2,6 +2,8 @@
 إلى تلغرام (أبسط طريقة مجانية موثوقة، بلا OAuth). يُشغَّل يدوياً أو بجدولة يومية."""
 import io
 import os
+import sqlite3
+import tempfile
 import datetime as dt
 
 import requests
@@ -63,6 +65,28 @@ def _fmt(v):
     return v
 
 
+def db_snapshot() -> bytes | None:
+    """لقطة متسقة من قاعدة SQLite عبر VACUUM INTO — آمنة حتى أثناء كتابة جارية،
+    بخلاف قراءة الملف مباشرة التي قد تلتقط نسخة ناقصة. تعيد None إن لم تكن القاعدة SQLite."""
+    path = db_file_path()
+    if not path or not os.path.exists(path):
+        return None
+    fd, tmp = tempfile.mkstemp(suffix=".sqlite")
+    os.close(fd)
+    os.remove(tmp)                       # VACUUM INTO يرفض الكتابة فوق ملف موجود
+    try:
+        con = sqlite3.connect(path)
+        try:
+            con.execute("VACUUM INTO ?", (tmp,))
+        finally:
+            con.close()
+        with open(tmp, "rb") as f:
+            return f.read()
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
 def _send_document(content: bytes, filename: str, caption: str = ""):
     url = TG_API.format(token=config.TELEGRAM_BOT_TOKEN, method="sendDocument")
     r = requests.post(url, timeout=60,
@@ -85,12 +109,12 @@ def run_backup() -> dict:
                    caption=f"📊 سجل الشحنات — {stamp}")
     sent.append("xlsx")
 
-    # 2) نسخة من قاعدة البيانات (SQLite فقط؛ Postgres يُنسخ من Railway مباشرة)
-    path = db_file_path()
-    if path and os.path.exists(path):
-        with open(path, "rb") as f:
-            _send_document(f.read(), f"zohat_db_{stamp}.sqlite",
-                           caption=f"💾 نسخة قاعدة البيانات — {stamp}")
+    # 2) نسخة من قاعدة البيانات — لقطة متسقة عبر VACUUM INTO
+    #    (SQLite فقط؛ Postgres يُنسخ من Railway مباشرة)
+    data = db_snapshot()
+    if data:
+        _send_document(data, f"zohat_db_{stamp}.sqlite",
+                       caption=f"💾 نسخة قاعدة البيانات — {stamp}")
         sent.append("db")
 
     return {"ok": True, "sent": sent, "time": stamp}
