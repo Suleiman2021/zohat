@@ -327,6 +327,20 @@ input.derived{background:#eef4f9;color:var(--navy);font-weight:700;cursor:not-al
    هامش الصفحة صفر (يُضبط في printDoc) كي لا يطبع المتصفح رابط الموقع والتاريخ
    في الترويسة/التذييل — والهوامش تُعوَّض هنا بحشوة على المحتوى نفسه. */
 @page{margin:0}
+/* زر التنزيل العائم (للمدير العام فقط): نسخة كاملة قاعدة + Excel من أي واجهة */
+.fab-backup{
+  position:fixed;bottom:18px;inset-inline-end:18px;z-index:60;
+  width:52px;height:52px;border-radius:50%;
+  background:var(--navy);color:#fff;border:none;
+  font-size:22px;line-height:1;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 4px 14px rgba(24,60,96,.35);
+  transition:transform .15s,box-shadow .15s;
+}
+.fab-backup:hover{transform:translateY(-2px);box-shadow:0 7px 20px rgba(24,60,96,.42)}
+.fab-backup:disabled{opacity:.75;cursor:wait;transform:none}
+@media (max-width:640px){ .fab-backup{width:46px;height:46px;bottom:14px;inset-inline-end:14px} }
+
 @media print{
   .sidebar,.no-print,button,#toasts,.view>h1{display:none!important}
   .np{display:none!important}

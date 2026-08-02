@@ -222,6 +222,24 @@ async function showApp(){
   (MENUS[API.role]||[]).forEach(k=>{
     const a=el("a",null,TITLES[k]); a.onclick=()=>route(k,a); nav.appendChild(a);
   });
+  // زر عائم ثابت في كل الواجهات (للمدير العام فقط): تنزيل نسخة كاملة قاعدة + Excel
+  if(API.role==="admin" && !document.getElementById("fabBackup")){
+    const b=el("button","fab-backup no-print","⬇");
+    b.id="fabBackup";
+    b.title="تنزيل نسخة كاملة محلياً (قاعدة البيانات + Excel)";
+    b.onclick=async()=>{
+      if(b.disabled) return;
+      b.disabled=true; b.textContent="⏳";
+      const d=new Date().toISOString().slice(0,10);
+      try{
+        await API.download("/api/backup/db",{},`zohat_db_${d}.sqlite`);
+        await API.download("/api/backup/download",{},`zohat_shipments_${d}.xlsx`);
+        toast("نُزِّلت قاعدة البيانات وملف Excel على جهازك");
+      }catch(err){ toast(err.message,true); }
+      b.disabled=false; b.textContent="⬇";
+    };
+    document.body.appendChild(b);
+  }
   route((MENUS[API.role]||["shipments"])[0], nav.firstChild);
 }
 function route(key,link){
