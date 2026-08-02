@@ -685,8 +685,9 @@ async function vBroker(){
   v.innerHTML=`<h1>التخليص الجمركي</h1>
     <div class="card no-print">
       <div class="seg" id="bseg">
-        <button class="seg-btn active" data-tab="تم التصدير">المُصدَّرة (في الطريق)</button>
-        <button class="seg-btn" data-tab="قيد التصدير">قيد التصدير</button>
+        <button class="seg-btn active" data-tab="exported">المصدَّرة</button>
+        <button class="seg-btn" data-tab="recent">المصدَّرة حديثاً</button>
+        <button class="seg-btn" data-tab="pending">قيد التصدير</button>
         <button class="seg-btn" data-tab="">الكل</button>
       </div>
       <div class="filters">
@@ -698,17 +699,59 @@ async function vBroker(){
       </div>
     </div>
     <div class="only-print">${brandHead()}</div>
+    <div id="bdrill" class="no-print"></div>
     <div class="card"><div id="btbl"></div></div>`;
-  let tab="تم التصدير", lastRows=[];
+  let tab="exported", lastRows=[],
+      drill={y:null,m:null,d:null},   // تنقّل مجلدات «المصدَّرة»
+      recentDay=null;                 // اليوم المفتوح في «المصدَّرة حديثاً»
+
+  // «المصدَّرة حديثاً»: مجلد لكل يوم تصدير خلال آخر ٧ أيام — دخول مباشر بلا سنة/شهر
+  const renderRecent=rows=>{
+    const box=$("#bdrill"); $("#btbl").innerHTML="";
+    const cutoff=new Date(Date.now()-7*864e5).toISOString().slice(0,10);
+    const g={};
+    rows.forEach(r=>{ const k=expDate(r); if(k && k>=cutoff) (g[k]=g[k]||[]).push(r); });
+    const days=Object.keys(g).sort().reverse();
+    if(recentDay && !g[recentDay]) recentDay=null;   // اليوم المفتوح خرج من النطاق/الفلاتر
+    if(!recentDay){
+      lastRows=[];
+      box.innerHTML = days.length ? `<div class="folders">${days.map(d=>{
+          const [y,m,dd]=d.split("-");
+          return `<button class="folder" data-k="${d}"><span class="fi">📁</span>
+            <span class="fname">${dd} ${MONTH_AR[+m-1]} ${y}</span>
+            <span class="fcount">${g[d].length} شحنة</span></button>`;}).join("")}</div>
+        <p class="hint">الشحنات المصدَّرة خلال آخر ٧ أيام — اختر يوماً لعرض كشفه</p>`
+        : `<div class="card">${empty("لا توجد شحنات مصدَّرة خلال آخر ٧ أيام")}</div>`;
+      box.querySelectorAll(".folder").forEach(b=>b.onclick=()=>{ recentDay=b.dataset.k; load(); });
+    }else{
+      const [y,m,dd]=recentDay.split("-");
+      box.innerHTML=`<div class="crumbs"><button class="crumb" data-lvl="root">📁 الأيام الحديثة</button>
+        <span class="sep">‹</span><span class="crumb cur">${dd} ${MONTH_AR[+m-1]} ${y}</span></div>`;
+      box.querySelector('.crumb[data-lvl]').onclick=()=>{ recentDay=null; load(); };
+      lastRows=g[recentDay]; renderBroker(g[recentDay], load);
+    }
+  };
+
   const load=async()=>{
     const params={date_from:$("#bdf").value,date_to:$("#bdt").value,to_city:$("#btc").value};
-    if(tab) params.export_status=tab;
+    if(tab==="exported"||tab==="recent") params.export_status=EXPORTED;
+    else if(tab==="pending") params.export_status="قيد التصدير";
     const rows=await API.get("/api/shipments", params);
-    lastRows=rows; renderBroker(rows, load);
+    if(tab==="exported"){
+      // نظام المجلدات نفسه المستخدم في سجل الشحنات والتقارير: سنة ← شهر ← يوم
+      $("#btbl").innerHTML=""; if(!drill.d) lastRows=[];
+      renderDrill($("#bdrill"), rows, drill, load,
+        day=>{ lastRows=day; renderBroker(day, load); }, "لا توجد شحنات مصدَّرة");
+    }else if(tab==="recent"){
+      renderRecent(rows);
+    }else{
+      $("#bdrill").innerHTML=""; lastRows=rows; renderBroker(rows, load);
+    }
   };
   $("#bxl").onclick=()=>exportXlsx(BROKER_COLS, lastRows, "customs", "كشف الجمارك");
   $("#bseg").querySelectorAll(".seg-btn").forEach(b=>b.onclick=()=>{
     tab=b.dataset.tab;
+    drill={y:null,m:null,d:null}; recentDay=null;   // كل تبويب يبدأ من جذر مجلداته
     $("#bseg").querySelectorAll(".seg-btn").forEach(x=>x.classList.toggle("active",x===b));
     load();
   });
