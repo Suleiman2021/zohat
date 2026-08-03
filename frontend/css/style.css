@@ -367,4 +367,11 @@ input.derived{background:#eef4f9;color:var(--navy);font-weight:700;cursor:not-al
   .brand-head{padding-bottom:6px;margin-bottom:8px}
   .invoice-sheet h2,.print-title{font-size:14px;margin:4px 0 8px}
   .hint{display:none}
+  /* فاتورة الزبون ولوحة التقارير: خط طباعة أكبر وأوضح */
+  .big-print th,.big-print td{font-size:13px;padding:5px 6px}
+  .big-print .kpis{grid-template-columns:repeat(4,1fr);gap:6px}
+  .big-print .kpi{padding:7px 9px}
+  .big-print .kpi .label{font-size:10.5px;line-height:1.3}
+  .big-print .kpi .val{font-size:15px;margin-top:2px}
+  .big-print .invoice-sheet h2,.big-print .print-title{font-size:19px;margin:6px 0 10px}
 }

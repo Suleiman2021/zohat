@@ -107,6 +107,30 @@ const REPORT_COLS=[
   ["collection_status","حالة التحصيل",r=>r.collection_status],
 ];
 
+// ===== الطباعة بأعداد صحيحة (فاتورة الزبون ولوحة التقارير فقط) =====
+// التقريب القياسي: 0.5 فأعلى ← للأعلى، وأقل منها ← للأسفل (7.5←8 و7.4←7).
+// الشاشة تبقى بالسنتات — التقريب للطباعة حصراً، ويُطبَّق على قيمة كل شحنة
+// ثم تُجمع المؤشرات من القيم المقرَّبة نفسها فتطابق مجموعَ ما يظهر في الجدول.
+const rint = n => Math.round(Number(n)||0);
+const moneyInt = n => rint(n).toLocaleString("en") + " $";
+// نسخة طباعة من سجل أعمدة: الأعمدة المالية تُعرض مقرَّبة، والوزن بلا فواصل
+function printCols(cols, moneyGetters){
+  return cols.map(([k,l,fn])=>{
+    if(moneyGetters[k]) return [k,l,(g=>r=>moneyInt(g(r)))(moneyGetters[k])];
+    if(k==="weight_kg") return [k,l,r=>rint(r.weight_kg)+" كغ"];
+    return [k,l,fn];
+  });
+}
+const INVOICE_COLS_PRINT = printCols(INVOICE_COLS, {
+  goods_value:r=>r.goods_value, goods_price:goodsWithCommission,
+  duties_only:r=>r.duties_only, tax_advance:r=>r.tax_advance,
+  consumption_fee:r=>r.consumption_fee, extra_fees:r=>r.extra_fees,
+  grand_total:r=>r.grand_total});
+const REPORT_COLS_PRINT = printCols(REPORT_COLS, {
+  goods_value:r=>r.goods_value, goods_price:r=>r.goods_price,
+  fees_total:r=>r.fees_total, cash_in:r=>r.cash_in,
+  cod_due:r=>r.cod_due, sender_debt:r=>r.sender_debt});
+
 // جدول مبني من سجل أعمدة: الشاشة تعرض الكل، والطباعة تُخفي غير المختار (صنف np)
 function colsTable(cols, rows, selectedKeys){
   const sel=(selectedKeys&&selectedKeys.length)?new Set(selectedKeys):null;
@@ -246,6 +270,8 @@ function route(key,link){
   document.querySelectorAll("#nav a").forEach(a=>a.classList.remove("active"));
   if(link)link.classList.add("active");
   $(".sidebar").classList.remove("open");   // إغلاق قائمة الموبايل بعد الاختيار
+  // فاتورة الزبون ولوحة التقارير تُطبعان بخط أكبر (صنف big-print في تنسيق الطباعة)
+  $("#view").classList.toggle("big-print", key==="invoice"||key==="reports");
   $("#view").innerHTML=`<div class="loading"><div class="spinner"></div></div>`;
   ({dashboard:vDashboard,shipments:vShipments,customs:vCustoms,broker:vBroker,invoice:vInvoice,
     reports:vReports,accounting:vAccounting,mahmoud:vMahmoud,items:vItems,lists:vLists,printfx:vPrintFx,users:vUsers,deliver:vDeliver}[key])();
@@ -889,17 +915,27 @@ function invoiceHtml(party, label, data){
   const goodsTotal=rows.reduce((a,r)=>a+goodsWithCommission(r),0);
   const table = rows.length ? colsTable(INVOICE_COLS, rows, PRINT_COLS.invoice)
     : empty("لا توجد شحنات مطابقة ضمن الفترة المحددة");
+  // نسخة الطباعة: قيم كل شحنة مقرَّبة لأعداد صحيحة، والمؤشرات مجموع المقرَّب
+  const ptable = rows.length ? colsTable(INVOICE_COLS_PRINT, rows, PRINT_COLS.invoice) : table;
+  const rSum=k=>rows.reduce((a,r)=>a+rint(r[k]),0);
+  const rGoods=rows.reduce((a,r)=>a+rint(goodsWithCommission(r)),0);
+  const kpis=(g,cash,cod,total,fmt)=>`
+      ${g>0?`<div class="kpi gold"><div class="label">ثمن البضاعة + العمولة</div>
+        <div class="val">${fmt(g)}</div></div>`:""}
+      <div class="kpi cash"><div class="label">الواصل نقداً</div><div class="val">${fmt(cash)}</div></div>
+      <div class="kpi cod"><div class="label">المستحق ضد الدفع</div><div class="val">${fmt(cod)}</div></div>
+      <div class="kpi"><div class="label">إجمالي المبلغ</div><div class="val">${fmt(total)}</div></div>`;
   return `<div class="card invoice-sheet">
     ${brandHead()}
     <h2>فاتورة الزبون (${label}): ${party}</h2>
-    ${table}
+    <div class="no-print">${table}</div>
+    <div class="only-print">${ptable}</div>
     <p class="hint no-print">الرسوم = الرسم السوري الفعلي + الرسم العراقي الفعلي + مصروف طرفين.</p>
-    <div class="kpis" style="margin-top:14px">
-      ${goodsTotal>0?`<div class="kpi gold"><div class="label">ثمن البضاعة + العمولة</div>
-        <div class="val">${money(goodsTotal)}</div></div>`:""}
-      <div class="kpi cash"><div class="label">الواصل نقداً</div><div class="val">${money(data.summary.cash_in)}</div></div>
-      <div class="kpi cod"><div class="label">المستحق ضد الدفع</div><div class="val">${money(data.summary.cod_due)}</div></div>
-      <div class="kpi"><div class="label">إجمالي المبلغ</div><div class="val">${money(data.summary.grand_total)}</div></div>
+    <div class="kpis no-print" style="margin-top:14px">
+      ${kpis(goodsTotal, data.summary.cash_in, data.summary.cod_due, data.summary.grand_total, money)}
+    </div>
+    <div class="kpis only-print" style="margin-top:14px">
+      ${kpis(rGoods, rSum("cash_in"), rSum("cod_due"), rSum("grand_total"), moneyInt)}
     </div></div>`;
 }
 
@@ -981,8 +1017,9 @@ async function vReports(){
    <p class="hint" id="rmode"></p></div>
    <div class="only-print">${brandHead()}<h2 class="print-title">تقرير الشحنات</h2></div>
    <div id="rdrill" class="no-print"></div>
-   <div id="rk" class="kpis"></div>
-   <div class="card" id="rmoreCard" hidden>
+   <div id="rk" class="kpis no-print"></div>
+   <div id="rkp" class="kpis only-print"></div>
+   <div class="card no-print" id="rmoreCard" hidden>
      <button class="detail-toggle" id="rmoreBtn" aria-expanded="false">
        <span class="caret">▾</span> تفاصيل أكثر</button>
      <div id="rmore" hidden></div>
@@ -1031,13 +1068,37 @@ async function vReports(){
         +gwc(r=>r.collection_status===DEFERRED)),"cod"],
       ["إجمالي عمولة ثمن البضاعة",money(sum("commission")),""],
     ];
-    $("#rk").innerHTML=K.map(([l,val,c])=>`<div class="kpi ${c}"><div class="label">${l}</div><div class="val">${val}</div></div>`).join("");
-    $("#rtbl").innerHTML=reportsTable(rows);
+    // مؤشرات الطباعة: كل شحنة تُقرَّب لعدد صحيح أولاً ثم تُجمع — فتطابق مجموعَ الجدول المطبوع
+    const rsum=(k,f)=>(f?rows.filter(f):rows).reduce((a,r)=>a+rint(r[k]),0);
+    const rgwc=f=>(f?rows.filter(f):rows).reduce((a,r)=>a+rint(goodsWithCommission(r)),0);
+    const KP=[
+      ["عدد الشحنات",rows.length,""],
+      ["عدد الزبائن",owners.size,""],
+      ["إجمالي الوزن",rsum("weight_kg")+" كغ",""],
+      ["إجمالي أجور الشحن والجمركة",moneyInt(rsum("fees_total")),""],
+      ["إجمالي ثمن البضاعة مع العمولة",moneyInt(rgwc()),""],
+      ["إجمالي المبلغ",moneyInt(rsum("fees_total")+rgwc()),"gold"],
+      ["الواصل نقداً",moneyInt(rsum("fees_total",r=>r.fees_payment==="واصل نقداً")
+        +rgwc(r=>r.collection_status==="تم التحصيل")),"cash"],
+      ["ضد الدفع",moneyInt(rsum("fees_total",r=>r.fees_payment==="ضد الدفع")
+        +rgwc(r=>r.collection_status==="لم يُحصَّل")),"cod"],
+      ["الآجل",moneyInt(rsum("fees_total",r=>r.fees_payment===DEFERRED)
+        +rgwc(r=>r.collection_status===DEFERRED)),"cod"],
+      ["إجمالي عمولة ثمن البضاعة",moneyInt(rsum("commission")),""],
+    ];
+    const kpiHtml=arr=>arr.map(([l,val,c])=>`<div class="kpi ${c}"><div class="label">${l}</div><div class="val">${val}</div></div>`).join("");
+    $("#rk").innerHTML=kpiHtml(K);
+    $("#rkp").innerHTML=kpiHtml(KP);
+    // الجدول: نسخة الشاشة بالسنتات، ونسخة الطباعة بالقيم المقرَّبة لكل شحنة
+    $("#rtbl").innerHTML = rows.length
+      ? `<div class="no-print">${reportsTable(rows)}</div>
+         <div class="only-print">${colsTable(REPORT_COLS_PRINT, rows, PRINT_COLS.reports)}</div>`
+      : reportsTable(rows);
     $("#rmoreCard").hidden = !rows.length;          // لا يظهر الزر بلا بيانات
     if(moreOpen) $("#rmore").innerHTML=detailPanels(rows);   // يتحدّث مع كل فلترة
   };
   const clearOut=()=>{
-    $("#rk").innerHTML=""; $("#rtbl").innerHTML=""; lastRows=[];
+    $("#rk").innerHTML=""; $("#rkp").innerHTML=""; $("#rtbl").innerHTML=""; lastRows=[];
     $("#rmoreCard").hidden=true; $("#rmore").innerHTML="";
   };
 
