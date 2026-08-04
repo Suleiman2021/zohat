@@ -2060,9 +2060,18 @@ async function vLists(){
     منطق الحسابات (calc.py) فلا يمكن حذفها أو تعديلها — لكن يمكن إضافة قيم جديدة بجانبها بحرية.</p>
     <div id="lw"></div>`;
   API.get("/api/backup/status").then(s=>{
-    $("#bkStatus").innerHTML = s.telegram_ready
-      ? `✅ تلغرام مُفعَّل — نسخة تلقائية كل ${s.interval_hours} ساعة.`
-      : `⚠ تلغرام غير مضبوط بعد. اضبط <b>TELEGRAM_BOT_TOKEN</b> و<b>TELEGRAM_CHAT_ID</b> في Railway لتفعيل الإرسال التلقائي.`;
+    if(!s.telegram_ready){
+      $("#bkStatus").innerHTML=`⚠ <b>تلغرام غير مضبوط</b> — لن تصل نسخ تلقائية.
+        اضبط <b>TELEGRAM_BOT_TOKEN</b> و<b>TELEGRAM_CHAT_ID</b> في Railway → Variables.`;
+      return;
+    }
+    const slots=[]; for(let h=0; h<24; h+=(s.interval_hours||3)) slots.push(String(h).padStart(2,"0")+":00");
+    $("#bkStatus").innerHTML=`✅ <b>الإرسال التلقائي يعمل</b> — كل ${s.interval_hours} ساعة
+        بتوقيت دمشق (${slots.join(" · ")}).
+      <br>الوقت الآن بدمشق: <b>${s.now_local}</b> · الموعد القادم: <b>${s.next_local}</b>
+      ${s.last_ok?`<br>آخر إرسال ناجح: <b>${s.last_ok}</b> (إجمالي ${s.runs} نسخة)`
+                 :`<br><span class="mini">لم تُرسل نسخة تلقائية بعد — ستصل في الموعد القادم.</span>`}
+      ${s.last_error?`<br><b class="neg">آخر خطأ: ${s.last_error}</b>`:""}`;
   }).catch(()=>{});
   $("#bkNow").onclick=async()=>{
     $("#bkNow").disabled=true; $("#bkNow").textContent="جارٍ الإرسال…";

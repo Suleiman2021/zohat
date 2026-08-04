@@ -3,7 +3,6 @@
 import os
 import sys
 import threading
-import time
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -83,18 +82,10 @@ def seed():
 
 
 def _backup_scheduler():
-    """جدولة نسخ احتياطي دورية (best-effort) — تعمل داخل العملية.
-    للموثوقية القصوى استخدم أيضاً رابط /api/backup/run مع cron-job.org."""
-    interval = config.BACKUP_INTERVAL_HOURS
-    if interval <= 0 or not (config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID):
-        return
-    from .backup import run_backup
-    while True:
-        time.sleep(interval * 3600)
-        try:
-            run_backup()
-        except Exception as e:
-            print(f"[backup] فشل النسخ الدوري: {e}")
+    """جدولة النسخ الاحتياطي — المواعيد مثبَّتة بالساعة ومحفوظة في القاعدة،
+    فلا تُفقد بإعادة النشر ويُستدرك الموعد الفائت. (التفاصيل في backup.py)"""
+    from .backup import scheduler_loop
+    scheduler_loop()
 
 
 @app.on_event("startup")

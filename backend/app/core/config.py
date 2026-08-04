@@ -23,8 +23,13 @@ CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if 
 # --- إعدادات النسخ الاحتياطي (تلغرام) — اختيارية ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+# عنوان واجهة تلغرام — يُغيَّر في الاختبار فقط، وفي الإنتاج يبقى الافتراضي
+TELEGRAM_API_BASE = os.getenv("TELEGRAM_API_BASE", "https://api.telegram.org")
 BACKUP_TOKEN = os.getenv("BACKUP_TOKEN", "")          # رمز سرّي لتشغيل النسخ عبر رابط cron
-BACKUP_INTERVAL_HOURS = int(os.getenv("BACKUP_INTERVAL_HOURS", "24"))  # 0 = تعطيل الجدولة
+# كل كم ساعة تُرسل نسخة — المواعيد مثبَّتة على الساعة (0،3،6... بتوقيت دمشق). 0 = تعطيل
+BACKUP_INTERVAL_HOURS = int(os.getenv("BACKUP_INTERVAL_HOURS", "3"))
+# فرق توقيت دمشق عن UTC. سوريا ألغت التوقيت الصيفي منذ 2022 فهي دائماً +3
+BACKUP_TZ_OFFSET = float(os.getenv("BACKUP_TZ_OFFSET", "3"))
 
 # القيم الافتراضية (نفس منطق ملف الإكسل)
 DEFAULT_TAX_ADVANCE = 0.02      # السلفة الضريبية

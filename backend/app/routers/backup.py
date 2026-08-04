@@ -12,7 +12,7 @@ from ..core.security import admin_or_accountant, admin_only
 from ..core import config
 from ..core.database import engine, db_file_path, init_db
 from ..models import User
-from ..backup import run_backup, shipments_xlsx, db_snapshot
+from ..backup import run_backup, shipments_xlsx, db_snapshot, backup_state
 
 router = APIRouter(prefix="/api/backup", tags=["backup"])
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -26,10 +26,11 @@ def _attachment(data: bytes, name: str, mime: str) -> StreamingResponse:
 
 @router.get("/status")
 def status(user: User = Depends(admin_or_accountant)):
-    """هل إعدادات تلغرام مضبوطة؟ (لعرض الحالة في الواجهة)."""
+    """حالة النسخ الاحتياطي: إعداد تلغرام + جدول المواعيد وآخر إرسال وأي خطأ."""
     return {"telegram_ready": bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID),
             "interval_hours": config.BACKUP_INTERVAL_HOURS,
-            "sqlite": db_file_path() is not None}
+            "sqlite": db_file_path() is not None,
+            **backup_state()}
 
 
 @router.post("/now")
