@@ -59,6 +59,9 @@ const badge=(txt,ok)=>`<span class="badge ${ok?'done':'pend'}">${txt}</span>`;
 // ثمن البضاعة مجموعاً مع عمولة الشراء — ما يدفعه الزبون مقابل بضاعته.
 // يجب تعريفها قبل INVOICE_COLS لأن المصفوفة تشير إليها مباشرةً عند إنشائها.
 const goodsWithCommission = r => (Number(r.goods_price)||0) + (Number(r.commission)||0);
+// الرسوم كما تظهر للزبون: تشمل تسوية الحد الأدنى (تكملة موجبة أو إعفاء سالب)
+// فيبقى مجموع بنود الفاتورة مطابقاً للمجموع النهائي المحتسب في حساب الجمارك.
+const dutiesShown = r => (Number(r.duties_only)||0) + (Number(r.fee_adjust)||0);
 const INVOICE_COLS=[
   ["ship_date","التاريخ",r=>r.ship_date],
   ["ref_no","رقم القيد",r=>r.ref_no],
@@ -71,7 +74,7 @@ const INVOICE_COLS=[
   ["goods_value","قيمة الفاتورة",r=>money(r.goods_value)],
   // ثمن البضاعة شاملاً عمولة الشراء (عند الشراء نيابةً عن الزبون)
   ["goods_price","ثمن البضاعة + العمولة",r=>money(goodsWithCommission(r)), goodsWithCommission],
-  ["duties_only","الرسوم",r=>money(r.duties_only)],
+  ["duties_only","الرسوم",r=>money(dutiesShown(r)), dutiesShown],
   ["tax_advance","السلفة الضريبية",r=>money(r.tax_advance)],
   ["consumption_fee","رسم الإنفاق",r=>money(r.consumption_fee)],
   ["extra_fees","الأجور الإضافية",r=>money(r.extra_fees)],
@@ -123,7 +126,7 @@ function printCols(cols, moneyGetters){
 }
 const INVOICE_COLS_PRINT = printCols(INVOICE_COLS, {
   goods_value:r=>r.goods_value, goods_price:goodsWithCommission,
-  duties_only:r=>r.duties_only, tax_advance:r=>r.tax_advance,
+  duties_only:dutiesShown, tax_advance:r=>r.tax_advance,
   consumption_fee:r=>r.consumption_fee, extra_fees:r=>r.extra_fees,
   grand_total:r=>r.grand_total});
 const REPORT_COLS_PRINT = printCols(REPORT_COLS, {
@@ -431,12 +434,20 @@ function renderShip(rows, tab, load){
   const bar=$("#exportbar"); bar.innerHTML="";
   if(!rows.length){ $("#tbl").innerHTML=empty("لا توجد شحنات مطابقة"); return; }
   const pending = tab==="قيد التصدير";
-  const selectable = pending;   // التصدير الجماعي من تبويب «قيد التصدير»
+  const isAdmin = API.role==="admin";
+  const isCollector = API.role==="collector";
+  // مسؤول التجميع لا يصدّر — فلا شريط تصدير جماعي له
+  const canExport = pending && !isCollector;
+  // المدير العام: تحديد جماعي في تبويب المصدَّرة (إرجاع أو حذف دفعة)
+  const canBulkExported = tab===EXPORTED && isAdmin;
+  const selectable = canExport || canBulkExported;
   const h=[];
   if(selectable) h.push(`<th class="chk-col"><input type="checkbox" id="selAll"></th>`);
   h.push(...["القيد","التاريخ","المسجِّل","المرسِل","المستلِم","من→إلى","الصنف","الوزن",
     "أجور الشحن","حالة الجمركة","حالة التصدير","حالة التسليم","إجراءات"].map(x=>`<th>${x}</th>`));
-  const canDel = API.role==="admin" || API.role==="supervisor";   // الحذف للإدارة والمشرف فقط
+  const canDel = isAdmin || API.role==="supervisor";   // الحذف للإدارة والمشرف فقط
+  // الشحنة المُصدَّرة خارج صلاحية مسؤول التجميع تماماً (تعديلاً وإرجاعاً وحذفاً)
+  const locked = r => isCollector && r.export_status===EXPORTED;
   $("#tbl").innerHTML=wrapTable(`<table><thead><tr>${h.join("")}</tr></thead><tbody>${
     rows.map(r=>`<tr>
       ${selectable?`<td class="chk-col"><input type="checkbox" class="rsel" value="${r.id}"></td>`:''}
@@ -449,35 +460,56 @@ function renderShip(rows, tab, load){
       <td>${statusBadge(r.customs_status, r.customs_computed)}</td>
       <td>${statusBadge(r.export_status, r.export_status===EXPORTED)}${r.export_date?`<div class="mini">${r.export_date}</div>`:''}</td>
       <td>${statusBadge(r.delivery_status, r.delivery_status==='تم التسليم')}</td>
-      <td class="nowrap">
+      <td class="nowrap">${locked(r) ? '<span class="mini">مُصدَّرة — للإدارة</span>' : `
         <button class="sm" data-edit="${r.id}">تعديل</button>
-        ${r.export_status===EXPORTED?`<button class="sm" data-unexp="${r.id}">↩ إرجاع</button>`:''}
-        ${canDel?`<button class="sm danger" data-del="${r.id}">حذف</button>`:''}
+        ${r.export_status===EXPORTED && !isCollector?`<button class="sm" data-unexp="${r.id}">↩ إرجاع</button>`:''}
+        ${canDel?`<button class="sm danger" data-del="${r.id}">حذف</button>`:''}`}
       </td>
     </tr>`).join("")}</tbody></table>`);
 
-  // شريط التصدير الجماعي
+  // شريط الإجراءات الجماعية — تصدير (قيد التصدير) أو إرجاع/حذف (المصدَّرة، للمدير)
   if(selectable){
     bar.innerHTML=`<div class="action-bar" id="ab" hidden>
       <span id="selCount">0 محدَّدة</span>
-      <label>تاريخ الإصدار<input type="date" id="expDate" value="${today()}"></label>
-      <button class="primary" id="doExport">🚚 تصدير المحدَّد إلى الوجهة</button>
+      ${canExport?`<label>تاريخ الإصدار<input type="date" id="expDate" value="${today()}"></label>
+        <button class="primary" id="doExport">🚚 تصدير المحدَّد إلى الوجهة</button>`:''}
+      ${canBulkExported?`<button class="primary" id="doUnexport">↩ إرجاع المحدَّد إلى قيد التصدير</button>
+        <button class="sm danger" id="doBulkDel">🗑 حذف المحدَّد نهائياً</button>`:''}
     </div>`;
     const boxes=()=>[...$("#tbl").querySelectorAll(".rsel")];
+    const picked=()=>boxes().filter(b=>b.checked).map(b=>Number(b.value));
     const sync=()=>{
-      const sel=boxes().filter(b=>b.checked);
-      $("#ab").hidden = sel.length===0;
-      if(sel.length) $("#selCount").textContent=`${sel.length} محدَّدة`;
+      const n=boxes().filter(b=>b.checked).length;
+      $("#ab").hidden = n===0;
+      if(n) $("#selCount").textContent=`${n} محدَّدة`;
     };
     const selAll=$("#selAll");
     if(selAll) selAll.onchange=()=>{ boxes().forEach(b=>b.checked=selAll.checked); sync(); };
     boxes().forEach(b=>b.onchange=sync);
-    $("#doExport").onclick=async()=>{
-      const ids=boxes().filter(b=>b.checked).map(b=>Number(b.value));
+    if($("#doExport")) $("#doExport").onclick=async()=>{
+      const ids=picked();
       if(!ids.length){ toast("حدّد شحنة واحدة على الأقل", true); return; }
       try{
         const r=await API.post("/api/shipments/export",{ids, export_date:$("#expDate").value, status:EXPORTED});
         toast(`تم تصدير ${r.updated} شحنة إلى الوجهة`); load();
+      }catch(err){ toast(err.message, true); }
+    };
+    if($("#doUnexport")) $("#doUnexport").onclick=async()=>{
+      const ids=picked();
+      if(!ids.length){ toast("حدّد شحنة واحدة على الأقل", true); return; }
+      if(!confirm(`إرجاع ${ids.length} شحنة إلى «قيد التصدير»؟`)) return;
+      try{
+        const r=await API.post("/api/shipments/export",{ids, status:"قيد التصدير"});
+        toast(`رجعت ${r.updated} شحنة إلى قيد التصدير`); load();
+      }catch(err){ toast(err.message, true); }
+    };
+    if($("#doBulkDel")) $("#doBulkDel").onclick=async()=>{
+      const ids=picked();
+      if(!ids.length){ toast("حدّد شحنة واحدة على الأقل", true); return; }
+      if(!confirm(`حذف ${ids.length} شحنة نهائياً؟\n\nسيُحذف معها حساب جمركتها — لا يمكن التراجع.`)) return;
+      try{
+        const r=await API.post("/api/shipments/bulk-delete",{ids});
+        toast(`حُذفت ${r.deleted} شحنة`); load();
       }catch(err){ toast(err.message, true); }
     };
   }
@@ -530,7 +562,9 @@ function shipForm(done, sh, prefill){
       <small class="hint">يُحدَّد تلقائياً من ثمن البضاعة</small></label>
     <label>من قام بالشراء<input name="bought_by" value="${d.bought_by||''}" placeholder="عند شراء الشركة"></label>
     <label>جهة الإرسال<select name="from_city">${opts(CITIES, d.from_city||API.branch)}</select></label>
-    <label>جهة الاستلام<select name="to_city">${opts(CITIES, d.to_city)}</select></label>
+    <label>جهة الاستلام<select name="to_city" id="tocity">${opts(CITIES, d.to_city)}</select>
+      ${isEdit?`<button class="sm" type="button" id="propTo" style="margin-top:6px">
+        ⇉ تعميم على كل شحنات هذا المستلِم</button>`:''}</label>
     <label>دفع أجور الشحن والجمركة<select name="fees_payment">${opts(PAY, d.fees_payment)}</select></label>
     ${isEdit?`
     <label>حالة التصدير<select name="export_status">${opts(EXPORT_ST, d.export_status)}</select></label>
@@ -541,7 +575,7 @@ function shipForm(done, sh, prefill){
     `:''}
     <div style="grid-column:1/-1" class="btn-row">
       <button class="primary" type="submit">${isEdit?'حفظ التعديلات':'حفظ'}</button>
-      ${isEdit?'':'<button class="primary gold" type="button" id="saveMore">حفظ وإضافة صنف آخر لنفس الزبون</button>'}
+      <button class="primary gold" type="button" id="saveMore">حفظ وإضافة صنف آخر لنفس الزبون</button>
       <button class="sm" type="button" id="cancel">إلغاء</button></div>
   </form></div>
   ${isEdit?'':'<p class="hint">ملاحظة: حساب الرسوم الجمركية يتم لاحقاً من صفحة «حساب الجمارك».</p>'}`;
@@ -556,6 +590,30 @@ function shipForm(done, sh, prefill){
   $("#gprice").addEventListener("input", syncFin); syncFin();
   $("#cancel").onclick=done;
 
+  // تعميم جهة الاستلام على بقية شحنات نفس المستلِم ضمن نفس الدفعة:
+  // قيد التصدير ← كل شحناته قيد التصدير. مُصدَّرة ← المصدَّرة بنفس التاريخ فقط.
+  if($("#propTo")) $("#propTo").onclick=async()=>{
+    const btn=$("#propTo"), city=$("#tocity").value;
+    const exported = sh.export_status===EXPORTED;
+    const scope = exported
+      ? `المُصدَّرة بتاريخ ${sh.export_date||"—"} فقط`
+      : "التي ما زالت قيد التصدير";
+    if(!confirm(`تعميم جهة الاستلام «${city}» على كل شحنات المستلِم `+
+      `«${sh.receiver_name||"—"}» ${scope}؟\n\nسيُحفظ التعديل الحالي أولاً.`)) return;
+    btn.disabled=true; btn.textContent="جارٍ التعميم…";
+    try{
+      await save();                       // يُحفظ اختيار المدينة أولاً ثم يُعمَّم
+      const r=await API.post(`/api/shipments/${sh.id}/propagate-destination`,{});
+      toast(r.updated
+        ? `عُدِّلت ${r.updated} شحنة أخرى لـ«${r.receiver}» إلى ${r.to_city} (${r.scope})`
+        : "لا توجد شحنات أخرى بحاجة تعديل ضمن هذا النطاق");
+      done();
+    }catch(err){
+      toast(err.message, true);
+      btn.disabled=false; btn.textContent="⇉ تعميم على كل شحنات هذا المستلِم";
+    }
+  };
+
   const save=async()=>{
     const fd=Object.fromEntries(new FormData($("#f")));
     ["count","weight_kg","goods_value","goods_price","extra_fees"].forEach(k=>fd[k]=Number(fd[k]||0));
@@ -568,11 +626,14 @@ function shipForm(done, sh, prefill){
     try{ await save(); toast(isEdit?"تم حفظ التعديلات":"تم تسجيل الشحنة"); done(); }
     catch(err){ toast(err.message, true); }
   });
-  // حفظ ثم إعادة فتح النموذج ببيانات الزبون نفسها (صنف آخر لنفس الشحنة/الزبون)
+  // حفظ ثم إعادة فتح النموذج ببيانات الزبون نفسها (صنف آخر لنفس الشحنة/الزبون).
+  // يعمل في التعديل أيضاً: يُحفظ التعديل ثم يُفتح نموذج شحنة **جديدة** — وهي دائماً
+  // «قيد التصدير» ولو كانت الشحنة المُعدَّلة مُصدَّرة (حالة التصدير لا تُنسخ إطلاقاً).
   if($("#saveMore")) $("#saveMore").onclick=async()=>{
     try{
       const fd=await save();
-      toast("تم الحفظ — أدخل الصنف التالي لنفس الزبون");
+      toast(isEdit ? "حُفظ التعديل — أدخل صنفاً جديداً لنفس الزبون (قيد التصدير)"
+                   : "تم الحفظ — أدخل الصنف التالي لنفس الزبون");
       const keep={};
       ["ship_date","sender_name","sender_phone","receiver_name","receiver_phone",
        "from_city","to_city","fees_payment","driver_name"].forEach(k=>keep[k]=fd[k]);
@@ -659,6 +720,15 @@ function breakdownCells(c){
     + cell("الأجور الإضافية L", money(c.extra_fees));
   if(c.commission || c.invested_capital){
     html += cell("عمولة الشراء", money(c.commission)) + cell("رأس مال مستثمر", money(c.invested_capital));
+  }
+  // تسوية الحد الأدنى: تظهر فقط عند وجودها — موجبة (تكملة) أو سالبة (إعفاء الأدوية)
+  const adj=Number(c.fee_adjust)||0;
+  if(adj>0.004){
+    html += `<div class="cell adj"><div class="k">＋ تكملة الحد الأدنى (شحنة خفيفة)</div>
+      <div class="v">${money(adj)}</div></div>`;
+  }else if(adj<-0.004){
+    html += `<div class="cell adj"><div class="k">− إعفاء الصنف من الأجور</div>
+      <div class="v">${money(adj)}</div></div>`;
   }
   // المجموع النهائي دائماً آخر كرت
   html += cell("المجموع النهائي M (أجور الشحن والجمركة)", money(c.fees_total));
@@ -930,7 +1000,8 @@ function invoiceHtml(party, label, data){
     <h2>فاتورة الزبون (${label}): ${party}</h2>
     <div class="no-print">${table}</div>
     <div class="only-print">${ptable}</div>
-    <p class="hint no-print">الرسوم = الرسم السوري الفعلي + الرسم العراقي الفعلي + مصروف طرفين.</p>
+    <p class="hint no-print">الرسوم = الرسم السوري الفعلي + الرسم العراقي الفعلي + مصروف طرفين
+      + تسوية الحد الأدنى (تكملة الشحنات الخفيفة، أو إعفاء الأصناف المعفاة).</p>
     <div class="no-print" style="margin-top:14px">
       <h3 class="sub">المؤشرات الدقيقة (بالسنتات)</h3>
       <div class="kpis">
@@ -969,8 +1040,10 @@ function detailPanels(rows){
     + card("مصروف الطرفين", sum("two_party_expense"))
     + card("الأجور الإضافية", sum("extra_fees"))
     + card("السلفة الضريبية", sum("tax_advance"))
-    + card("رسم الإنفاق الاستهلاكي", sum("consumption_fee")),
-      "الإجمالي = السوري + العراقي + مصروف الطرفين + الأجور الإضافية + السلفة + رسم الإنفاق")}
+    + card("رسم الإنفاق الاستهلاكي", sum("consumption_fee"))
+    + card("تسوية الحد الأدنى", sum("fee_adjust")),
+      "الإجمالي = السوري + العراقي + مصروف الطرفين + الأجور الإضافية + السلفة + رسم الإنفاق"
+      + " + تسوية الحد الأدنى")}
 
   ${grp("٢) ثمن البضاعة والعمولة",
       card("ثمن البضاعة (بدون عمولة)", sum("goods_price"))
@@ -2094,6 +2167,18 @@ async function vPrintFx(){
       </div>
       <p class="hint">مصروف الطرفين: إن أُدخلت قيمة يدوية في نموذج حساب الجمارك تُعتمد كما هي لكامل الشحنة،
         وإن تُرك الحقل <b>فارغاً</b> يُحسب تلقائياً = (الوزن ÷ 1000) × القيمة أعلاه.</p>
+      <h3 class="sub">الحد الأدنى لأجور الشحن والجمركة</h3>
+      <div class="filters">
+        <label>الحد الأدنى ($)
+          <input id="minFee" type="number" step="0.01" dir="ltr" value="${calc.min_fee??0}"></label>
+        <label>يسري على الشحنات حتى وزن (كغ)
+          <input id="minFeeW" type="number" step="0.01" dir="ltr" value="${calc.min_fee_max_weight??0}"></label>
+        <label>أصناف معفاة من الأجور كلياً (صنف في كل سطر)
+          <textarea id="feeExempt" rows="2" placeholder="أدوية">${(calc.fee_exempt_items||[]).join("\n")}</textarea></label>
+      </div>
+      <p class="hint">إن كان المجموع النهائي لشحنة وزنها ضمن الحد أقلَّ من هذا المبلغ يُكمَّل إليه تلقائياً،
+        وإن بلغه أو تجاوزه يبقى كما هو. والأصناف المعفاة أجورها <b>صفر</b> مهما كان وزنها أو رسومها.
+        (0 = تعطيل الحد الأدنى.) التعديل يُحفظ كنسخة جديدة فلا يمسّ الشحنات المسجَّلة سابقاً.</p>
       <h3 class="sub">شرائح رسم الإنفاق الاستهلاكي (على الرسم السوري للطن الأصل)</h3>
       <div id="tiers"></div>
       <button class="sm" id="addTier">+ شريحة</button></div>
@@ -2189,6 +2274,9 @@ async function vPrintFx(){
         tax_advance_rate:Number($("#taxRate").value||0),
         default_commission:Number($("#commRate").value||0),
         two_party_per_ton:Number($("#twoPartyTon").value||0),
+        min_fee:Number($("#minFee").value||0),
+        min_fee_max_weight:Number($("#minFeeW").value||0),
+        fee_exempt_items:$("#feeExempt").value,
         tiers:curTiers, formulas, summary_formulas});
       toast(r.changed ? `تم الحفظ كنسخة معادلات جديدة (#${r.version}) — تسري على الشحنات الجديدة فقط`
                       : "لا توجد تغييرات لحفظها");

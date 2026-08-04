@@ -164,6 +164,9 @@ def get_calc_settings(db: Session = Depends(get_session), user: User = Depends(a
         "tax_advance_rate": cfg["tax_advance_rate"],
         "default_commission": cfg["default_commission"],
         "two_party_per_ton": cfg["two_party_per_ton"],
+        "min_fee": cfg.get("min_fee", 0.0),
+        "min_fee_max_weight": cfg.get("min_fee_max_weight", 0.0),
+        "fee_exempt_items": cfg.get("fee_exempt_items", []),
         "tiers": cfg["tiers"],
         "formulas": [{"key": key, "label": label, "excel": excel, "doc": doc,
                       "default": default, "expr": cfg["formulas"][key]}
@@ -187,12 +190,21 @@ def set_calc_settings(payload: dict, db: Session = Depends(get_session),
                for k, v in cfg.items()}
 
     # الثوابت
-    for field in ("tax_advance_rate", "default_commission", "two_party_per_ton"):
+    for field in ("tax_advance_rate", "default_commission", "two_party_per_ton",
+                  "min_fee", "min_fee_max_weight"):
         if field in payload:
             try:
                 new_cfg[field] = float(payload[field])
             except (TypeError, ValueError):
                 raise HTTPException(400, f"قيمة غير رقمية في {field}")
+    # أصناف معفاة من الأجور (نص بأسطر أو قائمة)
+    if "fee_exempt_items" in payload:
+        src = payload["fee_exempt_items"]
+        if isinstance(src, str):
+            src = [x for x in src.replace("،", "\n").split("\n")]
+        if not isinstance(src, list):
+            raise HTTPException(400, "قائمة الأصناف المعفاة غير صالحة")
+        new_cfg["fee_exempt_items"] = [str(x).strip() for x in src if str(x).strip()]
     # شرائح الإنفاق
     if "tiers" in payload:
         try:

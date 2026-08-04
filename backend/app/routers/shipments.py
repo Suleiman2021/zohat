@@ -28,6 +28,9 @@ BROKER_FIELDS = {"item_name", "item_code", "brand", "origin_country",
 ACCOUNTANT_FIELDS = DEST_FIELDS | {"export_status", "export_date", "financing",
                                    "goods_price", "bought_by"}
 
+# حقول التصدير — ممنوعة على مسؤول التجميع (لا يصدّر ولا يغيّر تاريخ الإصدار)
+EXPORT_FIELDS = {"export_status", "export_date"}
+
 EXPORTED = "تم التصدير"
 
 
@@ -164,7 +167,10 @@ def create_shipment(sh: Shipment, db: Session = Depends(get_session),
     # الأجور الإضافية تُدخَل من نموذج الشحنة نفسه (لا تُصفَّر هنا)
     sh.manual_tax_advance = None
     sh.manual_consumption_fee = None
+    # الشحنة الجديدة تبدأ دائماً قيد التصدير بلا تاريخ إصدار — حتى لو نُسخت
+    # حقولها عن شحنة مُصدَّرة عبر «حفظ وإضافة صنف آخر»
     sh.export_status = "قيد التصدير"
+    sh.export_date = None
     # الفرع يُدخل باسم فرعه فقط
     if user.role == ROLE_BRANCH:
         sh.from_city = user.branch
@@ -188,6 +194,8 @@ def export_shipments(payload: dict, db: Session = Depends(get_session),
     الفرع يصدّر ما أنشأه فقط؛ المدير/المحاسب أي شحنة. يقبل status لإرجاع الحالة."""
     if user.role == ROLE_BROKER:
         raise HTTPException(403, "المخلص الكمركي لا يصدّر الشحنات")
+    if user.role == ROLE_COLLECTOR:
+        raise HTTPException(403, "مسؤول التجميع لا يصدّر الشحنات — التصدير من صلاحية الإدارة")
     ids = payload.get("ids") or []
     export_date = _as_date(payload.get("export_date"))
     status = payload.get("status", EXPORTED)
@@ -203,6 +211,47 @@ def export_shipments(payload: dict, db: Session = Depends(get_session),
         db.add(sh); done += 1
     db.commit()
     return {"updated": done}
+
+
+@router.post("/{sid}/propagate-destination")
+def propagate_destination(sid: int, db: Session = Depends(get_session),
+                          user: User = Depends(any_role)):
+    """تعميم جهة الاستلام على بقية شحنات نفس المستلِم ضمن نفس الدفعة:
+    • الشحنة قيد التصدير ← كل شحنات المستلِم التي ما زالت قيد التصدير.
+    • الشحنة مُصدَّرة     ← شحنات المستلِم المصدَّرة **بنفس تاريخ التصدير فقط**،
+      فلا يمتدّ التعديل إلى دفعات أخرى للزبون نفسه."""
+    sh = db.get(Shipment, sid)
+    if not sh:
+        raise HTTPException(404, "الشحنة غير موجودة")
+    if user.role in (ROLE_BROKER, ROLE_COLLECTOR) and sh.export_status == EXPORTED:
+        raise HTTPException(403, "لا تملك صلاحية تعديل الشحنات المُصدَّرة")
+    name = (sh.receiver_name or "").strip()
+    if not name:
+        raise HTTPException(400, "الشحنة بلا اسم مستلِم — لا يمكن التعميم")
+
+    q = select(Shipment).where(Shipment.receiver_name == name,
+                               Shipment.export_status == sh.export_status)
+    if sh.export_status == EXPORTED:
+        if not sh.export_date:
+            raise HTTPException(400, "الشحنة مُصدَّرة بلا تاريخ تصدير — لا يمكن تحديد الدفعة")
+        q = q.where(Shipment.export_date == sh.export_date)
+    q = _visible(user, q)
+
+    updated, skipped = 0, 0
+    for other in db.exec(q).all():
+        if other.id == sh.id or other.to_city == sh.to_city:
+            continue
+        # الفرع لا يعدّل إلا شحنات أنشأها مصدره
+        if user.role == ROLE_BRANCH and other.from_city != user.branch:
+            skipped += 1
+            continue
+        other.to_city = sh.to_city
+        db.add(other); updated += 1
+    db.commit()
+    scope = (f"المُصدَّرة بتاريخ {sh.export_date}" if sh.export_status == EXPORTED
+             else "قيد التصدير")
+    return {"updated": updated, "skipped": skipped, "to_city": sh.to_city,
+            "receiver": name, "scope": scope}
 
 
 @router.post("/{sid}/customs/preview")
@@ -258,8 +307,11 @@ def update_shipment(sid: int, patch: dict, db: Session = Depends(get_session),
     elif user.role == ROLE_ACCOUNTANT:
         allowed &= ACCOUNTANT_FIELDS
     elif user.role == ROLE_COLLECTOR:
-        # مسؤول التجميع: بيانات التسجيل والتصدير، دون حقول الجمارك
-        allowed -= CUSTOMS_FIELDS
+        # مسؤول التجميع: بيانات التسجيل فقط — لا جمارك ولا تصدير،
+        # والشحنة بعد تصديرها تخرج من يده تماماً
+        if sh.export_status == EXPORTED:
+            raise HTTPException(403, "الشحنة مُصدَّرة — لا يمكن لمسؤول التجميع تعديلها")
+        allowed -= CUSTOMS_FIELDS | EXPORT_FIELDS
     for k in allowed:
         if hasattr(sh, k):
             val = patch[k]
@@ -275,6 +327,22 @@ def update_shipment(sid: int, patch: dict, db: Session = Depends(get_session),
         _sync_financing(sh)       # التمويل يتبع ثمن البضاعة دائماً
     db.add(sh); db.commit(); db.refresh(sh)
     return _enrich(db, sh)
+
+
+@router.post("/bulk-delete")
+def bulk_delete(payload: dict, db: Session = Depends(get_session),
+                user: User = Depends(admin_or_supervisor)):
+    """حذف دفعة شحنات محدَّدة (مع حساب جمركتها — كيان واحد)."""
+    ids = payload.get("ids") or []
+    if not ids:
+        raise HTTPException(400, "لم تُحدَّد أي شحنة")
+    done = 0
+    for sid in ids:
+        sh = db.get(Shipment, sid)
+        if sh:
+            db.delete(sh); done += 1
+    db.commit()
+    return {"deleted": done}
 
 
 @router.delete("/{sid}")

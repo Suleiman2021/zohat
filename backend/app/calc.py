@@ -65,9 +65,16 @@ FORMULA_SPECS = [
     ("duties_only", "الرسوم (بند الفاتورة)", "صفحة الزبون",
      "الرسم السوري الفعلي + الرسم العراقي الفعلي + مصروف طرفين",
      "syrian_actual + iraqi_actual + two_party_expense"),
+    ("fee_adjust", "تسوية الحد الأدنى للأجور", "—",
+     "فرق يُضاف ليبلغ المجموع النهائي الحدَّ الأدنى (min_fee) للشحنات الخفيفة "
+     "(وزنها ≤ min_fee_max_weight): إن كان المجموع أقل من الحد يُكمَّل إليه، وإن بلغه فلا إضافة. "
+     "وأصناف الإعفاء (is_fee_exempt — مثل الأدوية) تُصفَّر أجورها بالكامل بفرق سالب.",
+     "(-(duties_only + tax_advance + consumption_fee + extra_fees)) if is_fee_exempt"
+     " else (max(0, min_fee - (duties_only + tax_advance + consumption_fee + extra_fees))"
+     " if weight_kg <= min_fee_max_weight else 0)"),
     ("fees_total", "أجور الشحن والجمركة (المجموع النهائي)", "حساب الجمارك!M5",
-     "الرسوم + السلفة + رسم الإنفاق + الأجور الإضافية",
-     "duties_only + tax_advance + consumption_fee + extra_fees"),
+     "الرسوم + السلفة + رسم الإنفاق + الأجور الإضافية + تسوية الحد الأدنى",
+     "duties_only + tax_advance + consumption_fee + extra_fees + fee_adjust"),
     ("commission", "عمولة الشراء", "سجل الشحنات!AC5",
      "ثمن البضاعة × نسبة العمولة — فقط عندما تشتري الشركة نيابةً عن الزبون",
      "goods_price * commission_rate if is_company else 0"),
@@ -109,6 +116,9 @@ VARIABLE_DOCS = [
     ("two_party_expense_input", "مصروف الطرفين المُدخل يدوياً في نموذج الجمارك"),
     ("two_party_manual", "هل أُدخل مصروف الطرفين يدوياً؟ (True/False) — False يعني الحقل فارغ"),
     ("extra_fees", "أجور إضافية (دولار)"),
+    ("min_fee", "الحد الأدنى لأجور الشحن والجمركة (من الإعدادات)"),
+    ("min_fee_max_weight", "أقصى وزن (كغ) يسري عليه الحد الأدنى (من الإعدادات)"),
+    ("is_fee_exempt", "هل الصنف معفى من الأجور كلياً؟ (True/False) — قائمة الأصناف من الإعدادات"),
     ("tax_advance_rate", "نسبة السلفة الضريبية (افتراضي 0.02)"),
     ("commission_rate", "نسبة العمولة (يدوية للشحنة أو الافتراضية 0.05)"),
     ("consumption_rate", "نسبة الإنفاق من جدول الشرائح"),
@@ -162,10 +172,25 @@ SUMMARY_VARIABLE_DOCS = [
 ]
 
 
+def _norm_ar(s) -> str:
+    """توحيد شكل الاسم العربي للمقارنة: صور الألف والتاء المربوطة والياء والتشكيل.
+    فيتطابق «ادوية» مع «أدوية» — الكاتب قد يهمل الهمزة."""
+    t = (s or "").strip()
+    for src, dst in (("أإآٱ", "ا"), ("ة", "ه"), ("ىي", "ي")):
+        for ch in src:
+            t = t.replace(ch, dst)
+    return "".join(c for c in t if c not in "ًٌٍَُِّْـ")
+
+
 def default_calc_cfg() -> dict:
+    # الحد الأدنى مُطفأ افتراضياً (0) — تُفعّله الترقية أو الإعدادات، فتبقى
+    # النسخ القديمة المثبَّتة على الشحنات السابقة بلا تسوية وأرقامها كما هي.
     return {"tax_advance_rate": DEFAULT_TAX_ADVANCE,
             "default_commission": DEFAULT_BUY_COMMISSION,
             "two_party_per_ton": 0.0,
+            "min_fee": 0.0,                 # الحد الأدنى للمجموع النهائي ($)
+            "min_fee_max_weight": 0.0,      # يسري على الشحنات حتى هذا الوزن (كغ)
+            "fee_exempt_items": [],         # أصناف أجورها صفر دائماً (مثل: أدوية)
             "tiers": [list(t) for t in CONSUMPTION_TIERS],
             "formulas": dict(DEFAULT_FORMULAS),
             "summary_formulas": dict(DEFAULT_SUMMARY_FORMULAS)}
@@ -183,6 +208,14 @@ def _cfg_from_settings(db) -> dict:
             cfg["default_commission"] = float(rows["calc_default_commission"])
         if rows.get("calc_two_party_per_ton"):
             cfg["two_party_per_ton"] = float(rows["calc_two_party_per_ton"])
+        if rows.get("calc_min_fee"):
+            cfg["min_fee"] = float(rows["calc_min_fee"])
+        if rows.get("calc_min_fee_max_weight"):
+            cfg["min_fee_max_weight"] = float(rows["calc_min_fee_max_weight"])
+        if rows.get("calc_fee_exempt_items"):
+            names = json.loads(rows["calc_fee_exempt_items"])
+            if isinstance(names, list):
+                cfg["fee_exempt_items"] = [str(n).strip() for n in names if str(n).strip()]
         if rows.get("calc_tiers"):
             tiers = json.loads(rows["calc_tiers"])
             if isinstance(tiers, list) and tiers:
@@ -203,9 +236,13 @@ def _cfg_from_settings(db) -> dict:
 def _normalize(payload: dict) -> dict:
     """يكمل أي مفاتيح ناقصة من الافتراضيات (توافق أمامي مع نسخ قديمة)."""
     cfg = default_calc_cfg()
-    for k in ("tax_advance_rate", "default_commission", "two_party_per_ton"):
+    for k in ("tax_advance_rate", "default_commission", "two_party_per_ton",
+              "min_fee", "min_fee_max_weight"):
         if isinstance(payload.get(k), (int, float)):
             cfg[k] = float(payload[k])
+    if isinstance(payload.get("fee_exempt_items"), list):
+        cfg["fee_exempt_items"] = [str(n).strip() for n in payload["fee_exempt_items"]
+                                   if str(n).strip()]
     if isinstance(payload.get("tiers"), list) and payload["tiers"]:
         try:
             cfg["tiers"] = sorted([[float(a), float(b)] for a, b in payload["tiers"]])
@@ -247,11 +284,20 @@ _SUPERSEDED = {
         '(fees_total if fees_payment == "ضد الدفع" else 0)'
         ' + ((invested_capital + commission) if is_company else 0)',
     ],
+    # الصيغة القديمة لم تكن تعرف تسوية الحد الأدنى للشحنات الخفيفة ولا إعفاء الأدوية
+    "fees_total": [
+        "duties_only + tax_advance + consumption_fee + extra_fees",
+    ],
 }
+
+# قيم تُفعَّل مرة واحدة مع الترقية (قرار تشغيلي): حد أدنى 10$ للشحنات حتى 2 كغ،
+# والأدوية معفاة من الأجور كلياً.
+_UPGRADE_VALUES = {"min_fee": 10.0, "min_fee_max_weight": 2.0,
+                   "fee_exempt_items": ["أدوية"]}
 
 
 # رقم دفعة الترقية — زِدْه عند إضافة معادلات جديدة إلى _SUPERSEDED
-_UPGRADE_MARK = "calc_upgrade_applied_v3"
+_UPGRADE_MARK = "calc_upgrade_applied_v4"
 
 
 def upgrade_superseded_formulas(db) -> bool:
@@ -266,6 +312,11 @@ def upgrade_superseded_formulas(db) -> bool:
     for key, old_exprs in _SUPERSEDED.items():
         if cfg["formulas"].get(key) in old_exprs:
             cfg["formulas"][key] = DEFAULT_FORMULAS[key]
+            changed = True
+    # تفعيل ثوابت الحد الأدنى إن لم تُضبط بعد (لا نطغى على قيمة اختارها المستخدم)
+    for key, val in _UPGRADE_VALUES.items():
+        if not cfg.get(key):
+            cfg[key] = val
             changed = True
     if changed:
         save_version(db, cfg, "system-upgrade")
@@ -314,6 +365,7 @@ def _sample_vars() -> dict:
             "goods_value": 1000.0, "goods_price": 800.0,
             "two_party_per_ton": 10.0, "two_party_expense_input": 10.0,
             "two_party_manual": True, "extra_fees": 5.0,
+            "min_fee": 10.0, "min_fee_max_weight": 2.0, "is_fee_exempt": False,
             "tax_advance_rate": 0.02, "commission_rate": 0.05, "consumption_rate": 0.02,
             "is_company": True, "fees_payment": COD, "financing": COMPANY,
             "collection_status": COLLECTED, "delivery_status": DELIVERED}
@@ -389,6 +441,11 @@ def compute(sh, syrian_per_ton: float, iraqi_per_ton: float = 0.0,
         "two_party_expense_input": sh.two_party_expense or 0.0,
         "two_party_manual": not getattr(sh, "two_party_auto", True),
         "extra_fees": sh.extra_fees or 0.0,
+        # الحد الأدنى للأجور: يسري على الشحنات الخفيفة، والأصناف المعفاة أجورها صفر
+        "min_fee": cfg.get("min_fee", 0.0),
+        "min_fee_max_weight": cfg.get("min_fee_max_weight", 0.0),
+        "is_fee_exempt": _norm_ar(sh.item_name) in {_norm_ar(n)
+                                                    for n in cfg.get("fee_exempt_items", [])},
         "tax_advance_rate": cfg["tax_advance_rate"],
         "commission_rate": crate,
         "consumption_rate": tier_rate(eff_syrian_per_ton, cfg["tiers"]),

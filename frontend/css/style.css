@@ -170,6 +170,9 @@ form.add-row input{flex:1;min-width:160px;padding:9px;border:1px solid var(--lin
 .breakdown .cell{background:#f7fafd;border:1px solid var(--line);border-radius:var(--radius-sm);padding:10px}
 .breakdown .cell .k{font-size:11px;color:var(--muted);font-weight:600}
 .breakdown .cell .v{font-size:16px;font-weight:800;color:var(--navy);margin-top:2px;word-break:break-word}
+/* تسوية الحد الأدنى: بطاقة مميّزة كي يراها المحاسب فوراً */
+.breakdown .cell.adj{background:#fff8e6;border-color:var(--gold)}
+.breakdown .cell.adj .v{color:#8a6d0b}
 
 /* ---------- حالة فارغة + تحميل ---------- */
 .empty{text-align:center;color:var(--muted);padding:28px 10px}
