@@ -5,13 +5,15 @@ const API = {
   role: localStorage.getItem("role") || "",
   branch: localStorage.getItem("branch") || "",
   name: localStorage.getItem("name") || "",
+  username: localStorage.getItem("username") || "",   // اسم الدخول — لتمييز سجلات المستخدم نفسه
 
   save(d){ this.token=d.access_token; this.role=d.role; this.branch=d.branch||"";
-    this.name=d.full_name||"";
+    this.name=d.full_name||""; this.username=d.username||"";
     localStorage.setItem("token",this.token); localStorage.setItem("role",this.role);
-    localStorage.setItem("branch",this.branch); localStorage.setItem("name",this.name); },
-  clear(){ ["token","role","branch","name"].forEach(k=>localStorage.removeItem(k));
-    this.token=this.role=this.branch=this.name=""; },
+    localStorage.setItem("branch",this.branch); localStorage.setItem("name",this.name);
+    localStorage.setItem("username",this.username); },
+  clear(){ ["token","role","branch","name","username"].forEach(k=>localStorage.removeItem(k));
+    this.token=this.role=this.branch=this.name=this.username=""; },
 
   async login(username,password){
     const body=new URLSearchParams({username,password});

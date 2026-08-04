@@ -15,7 +15,8 @@ def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get
     if not user or not verify_pw(form.password, user.hashed_password):
         raise HTTPException(400, "اسم المستخدم أو كلمة المرور غير صحيحة")
     return {"access_token": make_token(user), "token_type": "bearer",
-            "role": user.role, "branch": user.branch, "full_name": user.full_name}
+            "role": user.role, "branch": user.branch, "full_name": user.full_name,
+            "username": user.username}
 
 
 @router.get("/me")

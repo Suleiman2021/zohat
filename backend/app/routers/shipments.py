@@ -6,7 +6,8 @@ from ..core.database import get_session
 from ..core.security import (any_role, admin_or_accountant,
                              admin_or_supervisor, can_register)
 from ..models import (User, Shipment, Item, ROLE_BRANCH, ROLE_BROKER,
-                      ROLE_COLLECTOR, ROLE_ACCOUNTANT, _as_date)
+                      ROLE_COLLECTOR, ROLE_ACCOUNTANT, ROLE_ADMIN,
+                      ROLE_SUPERVISOR, _as_date)
 from ..calc import compute, calc_cfg, cfg_resolver, COMPANY, CUSTOMER
 
 router = APIRouter(prefix="/api/shipments", tags=["shipments"])
@@ -351,8 +352,23 @@ def bulk_delete(payload: dict, db: Session = Depends(get_session),
 
 @router.delete("/{sid}")
 def delete_shipment(sid: int, db: Session = Depends(get_session),
-                    user: User = Depends(admin_or_supervisor)):
+                    user: User = Depends(any_role)):
+    """حذف شحنة (ومعها حساب جمركتها — كيان واحد).
+
+    الإدارة والمشرف الإداري: أي شحنة.
+    مسؤول التجميع: شحناته هو فقط، وما دامت **قيد التصدير** — فلا يحذف
+    ما سجّله غيره ولا ما خرج إلى الوجهة. وبقية الأدوار لا تحذف إطلاقاً."""
     sh = db.get(Shipment, sid)
-    if sh:
-        db.delete(sh); db.commit()
+    if not sh:
+        return {"ok": True}                      # محذوفة سلفاً — لا شيء يُفعل
+    if user.role in (ROLE_ADMIN, ROLE_SUPERVISOR):
+        pass
+    elif user.role == ROLE_COLLECTOR:
+        if sh.export_status == EXPORTED:
+            raise HTTPException(403, "الشحنة مُصدَّرة — لا يمكن حذفها")
+        if (sh.created_by or "") != user.username:
+            raise HTTPException(403, "لا يمكنك حذف إلا الشحنات التي سجّلتها بنفسك")
+    else:
+        raise HTTPException(403, "لا تملك صلاحية حذف الشحنات")
+    db.delete(sh); db.commit()
     return {"ok": True}

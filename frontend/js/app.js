@@ -243,6 +243,15 @@ async function showApp(){
     ? "مكتب فرع — "+API.branch : (ROLE_LABEL[API.role]||API.role);
   const tgl=$("#navToggle");
   if(tgl) tgl.onclick=()=>$(".sidebar").classList.toggle("open");
+  // الجلسات القديمة لا تحمل اسم الدخول (أُضيف لاحقاً) — نجلبه دون إلزام بإعادة الدخول
+  if(!API.username){
+    try{
+      const me=await API.get("/api/auth/me");
+      if(me && me.username){
+        API.username=me.username; localStorage.setItem("username", me.username);
+      }
+    }catch(e){/* تعذّر الجلب → الأزرار الحسّاسة تبقى مخفية والخادم يحمي على أي حال */}
+  }
   // القائمة تُبنى دائماً حتى لو فشل تحميل القوائم — كي لا تختفي الواجهة أبداً
   try{ await loadLists(); }catch(e){ console.warn("loadLists", e); }
   const nav=$("#nav"); nav.innerHTML="";
@@ -450,7 +459,11 @@ function renderShip(rows, tab, load){
   if(selectable) h.push(`<th class="chk-col"><input type="checkbox" id="selAll"></th>`);
   h.push(...["القيد","التاريخ","المسجِّل","المرسِل","المستلِم","من→إلى","الصنف","الوزن",
     "أجور الشحن","حالة الجمركة","حالة التصدير","حالة التسليم","إجراءات"].map(x=>`<th>${x}</th>`));
-  const canDel = isAdmin || API.role==="supervisor";   // الحذف للإدارة والمشرف فقط
+  // الحذف: الإدارة والمشرف لأي شحنة، ومسؤول التجميع لشحناته هو
+  // ما دامت قيد التصدير فقط (لا ما سجّله غيره ولا ما خرج للوجهة)
+  const canDel = r => (isAdmin || API.role==="supervisor") ||
+    (isCollector && r.export_status!==EXPORTED &&
+     (r.created_by||"")===API.username);
   // الشحنة المُصدَّرة خارج صلاحية مسؤول التجميع تماماً (تعديلاً وإرجاعاً وحذفاً)
   const locked = r => isCollector && r.export_status===EXPORTED;
   $("#tbl").innerHTML=wrapTable(`<table><thead><tr>${h.join("")}</tr></thead><tbody>${
@@ -468,7 +481,7 @@ function renderShip(rows, tab, load){
       <td class="nowrap">${locked(r) ? '<span class="mini">مُصدَّرة — للإدارة</span>' : `
         <button class="sm" data-edit="${r.id}">تعديل</button>
         ${r.export_status===EXPORTED && !isCollector?`<button class="sm" data-unexp="${r.id}">↩ إرجاع</button>`:''}
-        ${canDel?`<button class="sm danger" data-del="${r.id}">حذف</button>`:''}`}
+        ${canDel(r)?`<button class="sm danger" data-del="${r.id}">حذف</button>`:''}`}
       </td>
     </tr>`).join("")}</tbody></table>`);
 
