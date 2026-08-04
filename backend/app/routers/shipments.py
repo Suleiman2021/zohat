@@ -94,6 +94,7 @@ def list_shipments(db: Session = Depends(get_session), user: User = Depends(any_
                    date_from: Optional[str] = None, date_to: Optional[str] = None,
                    to_city: Optional[str] = None, from_city: Optional[str] = None,
                    sender: Optional[str] = None, receiver: Optional[str] = None,
+                   item: Optional[str] = None,
                    fees_payment: Optional[str] = None,
                    financing: Optional[str] = None,
                    export_status: Optional[str] = None,
@@ -108,6 +109,9 @@ def list_shipments(db: Session = Depends(get_session), user: User = Depends(any_
     if from_city: q = q.where(Shipment.from_city == from_city)
     if sender: q = q.where(Shipment.sender_name.contains(sender))
     if receiver: q = q.where(Shipment.receiver_name.contains(receiver))
+    # الصنف: بحث جزئي بالاسم أو بالكود الجمركي
+    if item:
+        q = q.where(Shipment.item_name.contains(item) | Shipment.item_code.contains(item))
     if fees_payment: q = q.where(Shipment.fees_payment == fees_payment)
     if financing: q = q.where(Shipment.financing == financing)
     if export_status: q = q.where(Shipment.export_status == export_status)

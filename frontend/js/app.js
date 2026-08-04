@@ -314,6 +314,7 @@ async function vShipments(){
        <label>جهة الاستلام<select id="tc">${optsWithAll(CITIES)}</select></label>
        <label>صاحب الشحنة (المستلِم)<input id="snd" placeholder="اسم جزئي"></label>
        <label>المرسِل<input id="sfrom" placeholder="اسم جزئي"></label>
+       <label>الصنف<input id="sitem" placeholder="اسم الصنف أو كوده"></label>
        <button class="sm" id="clr">مسح الفلاتر</button>
        ${API.role!=="accountant"?'<button class="primary gold" id="add">＋ شحنة جديدة</button>':''}
      </div>
@@ -325,10 +326,12 @@ async function vShipments(){
   let drill={y:null, m:null, d:null};      // تنقّل المصدَّرة: سنة ← شهر ← يوم
 
   const anyFilter=()=>[$("#df").value,$("#dt").value,$("#tc").value,
-                       $("#snd").value.trim(),$("#sfrom").value.trim()].some(Boolean);
+                       $("#snd").value.trim(),$("#sfrom").value.trim(),
+                       $("#sitem").value.trim()].some(Boolean);
   const load=async(fromSearch)=>{
     const params={date_from:$("#df").value,date_to:$("#dt").value,
-      to_city:$("#tc").value,receiver:$("#snd").value,sender:$("#sfrom").value};
+      to_city:$("#tc").value,receiver:$("#snd").value,sender:$("#sfrom").value,
+      item:$("#sitem").value};
     if(tab) params.export_status=tab;
     if(isBranch) params.from_city=API.branch;   // صفحة الاستلام تعرض ما أنشأه الفرع فقط
     const rows=await API.get("/api/shipments", params);
@@ -346,7 +349,7 @@ async function vShipments(){
     $("#seg").querySelectorAll(".seg-btn").forEach(x=>x.classList.toggle("active",x===b));
     load();
   });
-  const SIDS=["df","dt","tc","snd","sfrom"];
+  const SIDS=["df","dt","tc","snd","sfrom","sitem"];
   liveFilters(SIDS, ()=>load(true));        // فلترة فورية بلا زر بحث
   $("#clr").onclick=()=>{ SIDS.forEach(id=>{const e=$("#"+id); if(e) e.value="";});
     drill={y:null,m:null,d:null}; load(); };
@@ -438,9 +441,11 @@ function renderShip(rows, tab, load){
   const isCollector = API.role==="collector";
   // مسؤول التجميع لا يصدّر — فلا شريط تصدير جماعي له
   const canExport = pending && !isCollector;
-  // المدير العام: تحديد جماعي في تبويب المصدَّرة (إرجاع أو حذف دفعة)
+  // المدير العام: إرجاع جماعي في تبويب المصدَّرة
   const canBulkExported = tab===EXPORTED && isAdmin;
-  const selectable = canExport || canBulkExported;
+  // والحذف الجماعي متاح له في التبويبين معاً (قيد التصدير والمصدَّرة)
+  const canBulkDelete = isAdmin && (pending || tab===EXPORTED);
+  const selectable = canExport || canBulkExported || canBulkDelete;
   const h=[];
   if(selectable) h.push(`<th class="chk-col"><input type="checkbox" id="selAll"></th>`);
   h.push(...["القيد","التاريخ","المسجِّل","المرسِل","المستلِم","من→إلى","الصنف","الوزن",
@@ -473,8 +478,8 @@ function renderShip(rows, tab, load){
       <span id="selCount">0 محدَّدة</span>
       ${canExport?`<label>تاريخ الإصدار<input type="date" id="expDate" value="${today()}"></label>
         <button class="primary" id="doExport">🚚 تصدير المحدَّد إلى الوجهة</button>`:''}
-      ${canBulkExported?`<button class="primary" id="doUnexport">↩ إرجاع المحدَّد إلى قيد التصدير</button>
-        <button class="sm danger" id="doBulkDel">🗑 حذف المحدَّد نهائياً</button>`:''}
+      ${canBulkExported?`<button class="primary" id="doUnexport">↩ إرجاع المحدَّد إلى قيد التصدير</button>`:''}
+      ${canBulkDelete?`<button class="sm danger" id="doBulkDel">🗑 حذف المحدَّد نهائياً</button>`:''}
     </div>`;
     const boxes=()=>[...$("#tbl").querySelectorAll(".rsel")];
     const picked=()=>boxes().filter(b=>b.checked).map(b=>Number(b.value));
@@ -539,6 +544,9 @@ function reportsTable(rows){
 // prefill: قيم مبدئية لشحنة جديدة (تُستخدم في «حفظ وإضافة صنف آخر لنفس الزبون»)
 function shipForm(done, sh, prefill){
   const v=$("#view"); const isEdit=!!sh; const d=sh||prefill||{};
+  // مسؤول التجميع لا يصدّر — فحقلا حالة/تاريخ التصدير مجمَّدان لديه
+  // (الخادم يرفضهما أصلاً؛ التجميد هنا كي لا يظنّ أن تعديله سيُحفظ)
+  const noExport = API.role==="collector";
   v.innerHTML=`<h1>${isEdit?`تعديل الشحنة — القيد ${sh.ref_no}`:'شحنة جديدة — استلام'}</h1>
   <div class="card"><form class="grid" id="f">
     <label>التاريخ<input type="date" name="ship_date" value="${d.ship_date||''}" required></label>
@@ -567,8 +575,11 @@ function shipForm(done, sh, prefill){
         ⇉ تعميم على كل شحنات هذا المستلِم</button>`:''}</label>
     <label>دفع أجور الشحن والجمركة<select name="fees_payment">${opts(PAY, d.fees_payment)}</select></label>
     ${isEdit?`
-    <label>حالة التصدير<select name="export_status">${opts(EXPORT_ST, d.export_status)}</select></label>
-    <label>تاريخ الإصدار<input type="date" name="export_date" value="${d.export_date||''}"></label>
+    <label>حالة التصدير<select name="export_status" ${noExport?'disabled':''}
+      class="${noExport?'derived':''}">${opts(EXPORT_ST, d.export_status)}</select>
+      ${noExport?'<small class="hint">التصدير من صلاحية الإدارة</small>':''}</label>
+    <label>تاريخ الإصدار<input type="date" name="export_date" value="${d.export_date||''}"
+      ${noExport?'disabled class="derived"':''}></label>
     <label>حالة التسليم<select name="delivery_status">${opts(DELIVERY, d.delivery_status)}</select></label>
     <label>تاريخ التسليم<input type="date" name="delivery_date" value="${d.delivery_date||''}"></label>
     <label>حالة التحصيل<select name="collection_status">${opts(COLLECTION, d.collection_status)}</select></label>
@@ -808,6 +819,7 @@ async function vBroker(){
         <label>من تاريخ<input type="date" id="bdf"></label>
         <label>إلى تاريخ<input type="date" id="bdt"></label>
         <label>جهة الاستلام<select id="btc">${optsWithAll(CITIES)}</select></label>
+        <label>الصنف<input id="bitem" placeholder="اسم الصنف أو كوده"></label>
         <button class="sm" id="bpr">🖨 طباعة كشف الجمارك</button>
         <button class="sm" id="bxl">⬇ تصدير Excel</button>
       </div>
@@ -847,7 +859,8 @@ async function vBroker(){
   };
 
   const load=async()=>{
-    const params={date_from:$("#bdf").value,date_to:$("#bdt").value,to_city:$("#btc").value};
+    const params={date_from:$("#bdf").value,date_to:$("#bdt").value,
+                  to_city:$("#btc").value,item:$("#bitem").value};
     if(tab==="exported"||tab==="recent") params.export_status=EXPORTED;
     else if(tab==="pending") params.export_status="قيد التصدير";
     const rows=await API.get("/api/shipments", params);
@@ -869,7 +882,7 @@ async function vBroker(){
     $("#bseg").querySelectorAll(".seg-btn").forEach(x=>x.classList.toggle("active",x===b));
     load();
   });
-  liveFilters(["bdf","bdt","btc"], load);
+  liveFilters(["bdf","bdt","btc","bitem"], load);
   $("#bpr").onclick=()=>printDoc("landscape");
   load();
 }
@@ -1080,6 +1093,7 @@ async function vReports(){
      <label>جهة الاستلام<select id="rtc">${optsWithAll(CITIES)}</select></label>
      <label>صاحب الشحنة (المستلِم)<input id="rsnd" placeholder="اسم جزئي"></label>
      <label>المرسِل<input id="rsfrom" placeholder="اسم جزئي"></label>
+     <label>الصنف<input id="ritem" placeholder="اسم الصنف أو كوده"></label>
      <label>تمويل البضاعة<select id="rfin">${optsWithAll(FINANCE)}</select></label>
      <label>دفع الأجور<select id="rfp">${optsWithAll(PAY)}</select></label>
      <label>حالة الجمركة<select id="rcs">${optsWithAll(CUSTOMS_ST)}</select></label>
@@ -1126,6 +1140,7 @@ async function vReports(){
   const filters=()=>({
     date_from:$("#rdf").value, date_to:$("#rdt").value, from_city:$("#rfc").value,
     to_city:$("#rtc").value, receiver:$("#rsnd").value, sender:$("#rsfrom").value,
+    item:$("#ritem").value,
     financing:$("#rfin").value, fees_payment:$("#rfp").value,
     customs_status:$("#rcs").value, delivery_status:$("#rds").value,
     collection_status:$("#rcol").value});
@@ -1209,7 +1224,8 @@ async function vReports(){
       "لا توجد شحنات صادرة مطابقة للفلاتر");
   };
 
-  const FIDS=["rdf","rdt","rfc","rtc","rsnd","rsfrom","rfin","rfp","rcs","rds","rcol","ralpha"];
+  const FIDS=["rdf","rdt","rfc","rtc","rsnd","rsfrom","ritem",
+              "rfin","rfp","rcs","rds","rcol","ralpha"];
   // الفلترة فورية — وتبقى داخل المجلد المفتوح بدل القفز لمستوى السنوات
   liveFilters(FIDS, load);
   $("#rclr").onclick=()=>{
