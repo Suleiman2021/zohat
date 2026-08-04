@@ -931,10 +931,14 @@ function invoiceHtml(party, label, data){
     <div class="no-print">${table}</div>
     <div class="only-print">${ptable}</div>
     <p class="hint no-print">الرسوم = الرسم السوري الفعلي + الرسم العراقي الفعلي + مصروف طرفين.</p>
-    <div class="kpis no-print" style="margin-top:14px">
-      ${kpis(goodsTotal, data.summary.cash_in, data.summary.cod_due, data.summary.grand_total, money)}
+    <div class="no-print" style="margin-top:14px">
+      <h3 class="sub">المؤشرات الدقيقة (بالسنتات)</h3>
+      <div class="kpis">
+        ${kpis(goodsTotal, data.summary.cash_in, data.summary.cod_due, data.summary.grand_total, money)}
+      </div>
     </div>
-    <div class="kpis only-print" style="margin-top:14px">
+    <h3 class="sub no-print" style="margin-top:12px">بعد التقريب (كما تُطبع)</h3>
+    <div class="kpis" style="margin-top:8px">
       ${kpis(rGoods, rSum("cash_in"), rSum("cod_due"), rSum("grand_total"), moneyInt)}
     </div></div>`;
 }
@@ -1017,8 +1021,12 @@ async function vReports(){
    <p class="hint" id="rmode"></p></div>
    <div class="only-print">${brandHead()}<h2 class="print-title">تقرير الشحنات</h2></div>
    <div id="rdrill" class="no-print"></div>
-   <div id="rk" class="kpis no-print"></div>
-   <div id="rkp" class="kpis only-print"></div>
+   <div id="rk" class="kpis"></div>
+   <div class="card no-print" id="rpreciseCard" hidden>
+     <button class="detail-toggle" id="rpreciseBtn" aria-expanded="false">
+       <span class="caret">▾</span> المؤشرات الدقيقة (بالسنتات)</button>
+     <div id="rprecise" hidden></div>
+   </div>
    <div class="card no-print" id="rmoreCard" hidden>
      <button class="detail-toggle" id="rmoreBtn" aria-expanded="false">
        <span class="caret">▾</span> تفاصيل أكثر</button>
@@ -1026,13 +1034,20 @@ async function vReports(){
    </div>
    <div class="card"><div id="rtbl"></div></div>`;
   $("#rpr").onclick=()=>printDoc("landscape");
-  let lastRows=[], folderMode=false, drill={y:null,m:null,d:null}, moreOpen=false;
+  let lastRows=[], folderMode=false, drill={y:null,m:null,d:null},
+      moreOpen=false, preciseOpen=false;
   $("#rmoreBtn").onclick=()=>{
     moreOpen=!moreOpen;
     $("#rmore").hidden=!moreOpen;
     $("#rmoreBtn").setAttribute("aria-expanded", moreOpen);
     $("#rmoreBtn").classList.toggle("open", moreOpen);
     if(moreOpen) $("#rmore").innerHTML=detailPanels(lastRows);
+  };
+  $("#rpreciseBtn").onclick=()=>{
+    preciseOpen=!preciseOpen;
+    $("#rprecise").hidden=!preciseOpen;
+    $("#rpreciseBtn").setAttribute("aria-expanded", preciseOpen);
+    $("#rpreciseBtn").classList.toggle("open", preciseOpen);
   };
 
   const filters=()=>({
@@ -1087,8 +1102,10 @@ async function vReports(){
       ["إجمالي عمولة ثمن البضاعة",moneyInt(rsum("commission")),""],
     ];
     const kpiHtml=arr=>arr.map(([l,val,c])=>`<div class="kpi ${c}"><div class="label">${l}</div><div class="val">${val}</div></div>`).join("");
-    $("#rk").innerHTML=kpiHtml(K);
-    $("#rkp").innerHTML=kpiHtml(KP);
+    // المقرَّبة هي الأساسية (شاشةً وطباعةً)، والدقيقة بالسنتات تنسدل من زرها
+    $("#rk").innerHTML=kpiHtml(KP);
+    $("#rprecise").innerHTML=`<div class="kpis" style="margin-top:10px">${kpiHtml(K)}</div>`;
+    $("#rpreciseCard").hidden = !rows.length;
     // الجدول: نسخة الشاشة بالسنتات، ونسخة الطباعة بالقيم المقرَّبة لكل شحنة
     $("#rtbl").innerHTML = rows.length
       ? `<div class="no-print">${reportsTable(rows)}</div>
@@ -1098,8 +1115,9 @@ async function vReports(){
     if(moreOpen) $("#rmore").innerHTML=detailPanels(rows);   // يتحدّث مع كل فلترة
   };
   const clearOut=()=>{
-    $("#rk").innerHTML=""; $("#rkp").innerHTML=""; $("#rtbl").innerHTML=""; lastRows=[];
+    $("#rk").innerHTML=""; $("#rprecise").innerHTML=""; $("#rtbl").innerHTML=""; lastRows=[];
     $("#rmoreCard").hidden=true; $("#rmore").innerHTML="";
+    $("#rpreciseCard").hidden=true;
   };
 
   const load=async()=>{

@@ -11,6 +11,7 @@
 القيود لا تُحذف — تُلغى ويبقى أثرها، وكل تعديل/إلغاء يُسجَّل في جدول تدقيق.
 النظام يدوي بالكامل ومنفصل عن الشحنات (عدا شاشة مقارنة الجمارك — للعرض فقط)."""
 import json
+import math
 from datetime import date, datetime
 from typing import Optional
 
@@ -442,6 +443,12 @@ def meta(user: User = Depends(admin_or_accountant)):
 
 
 # ========== الاستحقاقات التلقائية من الشحنات الصادرة ==========
+def _rint(x: float) -> int:
+    """تقريب نصفي لأعلى (7.5←8 و7.4←7) — يطابق تقريب الطباعة في الواجهة.
+    round() في بايثون تقرّب الأنصاف للزوجي فلا تصلح هنا."""
+    return int(math.floor((x or 0) + 0.5))
+
+
 def _computed_exported(db: Session):
     """كل الشحنات الصادرة (لها تاريخ تصدير) مع أرقامها المحسوبة بنسخة معادلاتها."""
     items = {i.name: (i.syrian_per_ton, i.iraqi_per_ton) for i in db.exec(select(Item)).all()}
@@ -471,10 +478,12 @@ def _auto_rows(db: Session, p: MBox) -> list[dict]:
                 continue
             amt = (c.get("fees_total", 0.0) if s.fees_payment == DEFERRED else 0.0) \
                 + (gwc if s.collection_status == DEFERRED else 0.0)
-        if amt <= 0.005:
+        # قيمة كل شحنة تُقرَّب لعدد صحيح أولاً ثم تُجمع (نفس منطق تقريب الطباعة)
+        amt = _rint(amt)
+        if amt <= 0:
             continue
         d = by_date.setdefault(str(s.export_date),
-                               {"export_date": str(s.export_date), "amount": 0.0,
+                               {"export_date": str(s.export_date), "amount": 0,
                                 "count": 0, "refs": []})
         d["amount"] += amt
         d["count"] += 1
@@ -500,9 +509,10 @@ def auto_charges(party_id: int, db: Session = Depends(get_session),
         raise HTTPException(404, "الجهة غير موجودة")
     if p.box_type not in (BOX_OFFICE, BOX_CUSTOMER):
         raise HTTPException(400, "الجلب التلقائي متاح لجهات «مكتب» و«زبون» فقط")
-    rule = ("مكتب: ضد الدفع للأجور + ثمن البضاعة والعمولة غير المحصَّلة — لشحنات وجهتها اسم المكتب"
-            if p.box_type == BOX_OFFICE else
-            "زبون: الآجل للأجور + ثمن البضاعة والعمولة الآجلة — لشحنات مرسِلها اسم الزبون")
+    rule = (("مكتب: ضد الدفع للأجور + ثمن البضاعة والعمولة غير المحصَّلة — لشحنات وجهتها اسم المكتب"
+             if p.box_type == BOX_OFFICE else
+             "زبون: الآجل للأجور + ثمن البضاعة والعمولة الآجلة — لشحنات مرسِلها اسم الزبون")
+            + ". القيم مقرَّبة لأعداد صحيحة: كل شحنة تُقرَّب (النصف فأعلى للأعلى) ثم تُجمع.")
     return {"party": p.dict(), "rule": rule, "rows": _auto_rows(db, p)}
 
 
