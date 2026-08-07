@@ -309,12 +309,14 @@ async function vDashboard(){
 const today = () => new Date().toISOString().slice(0,10);
 async function vShipments(){
   const isBranch = API.role==="branch";
+  // مسؤول التجميع المرتبط بمدينة: كل ما يراه من مدينته، فيُسمّى التبويب باسمها
+  const myCity = (API.role==="collector" && API.branch) ? API.branch : "";
   const v=$("#view");
-  v.innerHTML=`<h1>سجل الشحنات</h1>
+  v.innerHTML=`<h1>سجل الشحنات${myCity?` — ${myCity}`:""}</h1>
    <div class="card">
      <div class="seg" id="seg">
        <button class="seg-btn active" data-tab="قيد التصدير">قيد التصدير</button>
-       <button class="seg-btn" data-tab="تم التصدير">مصدّرة</button>
+       <button class="seg-btn" data-tab="تم التصدير">${myCity?`الصادر من ${myCity}`:"مصدّرة"}</button>
        <button class="seg-btn" data-tab="">الكل</button>
      </div>
      <div class="filters">
@@ -560,6 +562,9 @@ function shipForm(done, sh, prefill){
   // مسؤول التجميع لا يصدّر — فحقلا حالة/تاريخ التصدير مجمَّدان لديه
   // (الخادم يرفضهما أصلاً؛ التجميد هنا كي لا يظنّ أن تعديله سيُحفظ)
   const noExport = API.role==="collector";
+  // ومَن ارتبط بمدينة تُسجَّل شحناته باسمها حتماً (الخادم يفرضها)
+  const lockCity = API.role==="branch" ||
+                   (API.role==="collector" && !!API.branch);
   v.innerHTML=`<h1>${isEdit?`تعديل الشحنة — القيد ${sh.ref_no}`:'شحنة جديدة — استلام'}</h1>
   <div class="card"><form class="grid" id="f">
     <label>التاريخ<input type="date" name="ship_date" value="${d.ship_date||''}" required></label>
@@ -582,7 +587,9 @@ function shipForm(done, sh, prefill){
     <label>تمويل البضاعة (تلقائي)<input id="fin" readonly class="derived" value="${d.financing||FIN_CUSTOMER}">
       <small class="hint">يُحدَّد تلقائياً من ثمن البضاعة</small></label>
     <label>من قام بالشراء<input name="bought_by" value="${d.bought_by||''}" placeholder="عند شراء الشركة"></label>
-    <label>جهة الإرسال<select name="from_city">${opts(CITIES, d.from_city||API.branch)}</select></label>
+    <label>جهة الإرسال<select name="from_city" ${lockCity?'disabled class="derived"':''}
+      >${opts(CITIES, d.from_city||API.branch)}</select>
+      ${lockCity?`<small class="hint">شحناتك تُسجَّل باسم ${API.branch}</small>`:''}</label>
     <label>جهة الاستلام<select name="to_city" id="tocity">${opts(CITIES, d.to_city)}</select>
       ${isEdit?`<button class="sm" type="button" id="propTo" style="margin-top:6px">
         ⇉ تعميم على كل شحنات هذا المستلِم</button>`:''}</label>

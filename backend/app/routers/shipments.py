@@ -73,12 +73,23 @@ def _fill_item_code(db: Session, sh: Shipment):
 
 def _visible(user: User, q):
     """عزل البيانات: الفرع يرى ما أرسله (from_city) أو ما يصله (to_city).
-    مبني على المدينة لا على مالك السجل — فيراها أي مستخدم جديد في نفس الفرع
-    حتى لو أُنشئت الشحنة قبل إنشاء حسابه."""
+    ومسؤول التجميع المرتبط بمدينة يرى شحنات مدينته فقط (جهة الإرسال).
+    مبني على المدينة لا على مالك السجل — فيراها أي مستخدم جديد في نفس المدينة
+    حتى لو أُنشئت الشحنة قبل إنشاء حسابه. ومَن بلا مدينة يرى الكل (كما كان)."""
     if user.role == ROLE_BRANCH:
         return q.where((Shipment.from_city == user.branch) |
                        (Shipment.to_city == user.branch))
+    if user.role == ROLE_COLLECTOR and (user.branch or "").strip():
+        return q.where(Shipment.from_city == user.branch)
     return q
+
+
+def _assert_collector_city(user: User, sh: Shipment):
+    """عزل مسؤول التجميع لا يكفي إخفاءً في القوائم — يجب منع الوصول بالمعرِّف أيضاً،
+    وإلا عدّل شحنة مدينة أخرى لو عرف رقمها."""
+    if user.role == ROLE_COLLECTOR and (user.branch or "").strip() \
+            and sh.from_city != user.branch:
+        raise HTTPException(403, f"هذه الشحنة ليست من {user.branch} — خارج نطاق صلاحيتك")
 
 
 def _enrich(db, sh: Shipment, resolve=None) -> dict:
@@ -176,8 +187,9 @@ def create_shipment(sh: Shipment, db: Session = Depends(get_session),
     # حقولها عن شحنة مُصدَّرة عبر «حفظ وإضافة صنف آخر»
     sh.export_status = "قيد التصدير"
     sh.export_date = None
-    # الفرع يُدخل باسم فرعه فقط
-    if user.role == ROLE_BRANCH:
+    # الفرع — ومسؤول التجميع المرتبط بمدينة — يُدخل باسم مدينته فقط،
+    # وإلا سجّل شحنة بجهة إرسال أخرى فاختفت عنه فوراً بحكم عزل الرؤية
+    if user.role == ROLE_BRANCH or (user.role == ROLE_COLLECTOR and (user.branch or "").strip()):
         sh.from_city = user.branch
     # الفرع المُنشِئ = جهة الإرسال (ثابت لعزل الصلاحيات بصرف النظر عن الدور)
     sh.branch = sh.from_city
@@ -228,6 +240,7 @@ def propagate_destination(sid: int, db: Session = Depends(get_session),
     sh = db.get(Shipment, sid)
     if not sh:
         raise HTTPException(404, "الشحنة غير موجودة")
+    _assert_collector_city(user, sh)
     if user.role in (ROLE_BROKER, ROLE_COLLECTOR) and sh.export_status == EXPORTED:
         raise HTTPException(403, "لا تملك صلاحية تعديل الشحنات المُصدَّرة")
     name = (sh.receiver_name or "").strip()
@@ -314,6 +327,7 @@ def update_shipment(sid: int, patch: dict, db: Session = Depends(get_session),
     elif user.role == ROLE_COLLECTOR:
         # مسؤول التجميع: بيانات التسجيل فقط — لا جمارك ولا تصدير،
         # والشحنة بعد تصديرها تخرج من يده تماماً
+        _assert_collector_city(user, sh)
         if sh.export_status == EXPORTED:
             raise HTTPException(403, "الشحنة مُصدَّرة — لا يمكن لمسؤول التجميع تعديلها")
         allowed -= CUSTOMS_FIELDS | EXPORT_FIELDS
@@ -364,6 +378,7 @@ def delete_shipment(sid: int, db: Session = Depends(get_session),
     if user.role in (ROLE_ADMIN, ROLE_SUPERVISOR):
         pass
     elif user.role == ROLE_COLLECTOR:
+        _assert_collector_city(user, sh)
         if sh.export_status == EXPORTED:
             raise HTTPException(403, "الشحنة مُصدَّرة — لا يمكن حذفها")
         if (sh.created_by or "") != user.username:

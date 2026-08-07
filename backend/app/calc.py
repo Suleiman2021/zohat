@@ -11,6 +11,7 @@ from .core.config import (DEFAULT_TAX_ADVANCE, DEFAULT_BUY_COMMISSION,
 CASH = "واصل نقداً"
 COD = "ضد الدفع"
 DEFERRED = "آجل"          # ذمة على المرسِل، لا تُحصَّل في مكتب الوجهة
+FREE = "مجاناً"           # شحنة بلا أجور إطلاقاً — المجموع النهائي صفر
 COMPANY = "الشركة اشترت نيابةً عنه"
 CUSTOMER = "الزبون اشترى بنفسه"
 COLLECTED = "تم التحصيل"
@@ -66,12 +67,13 @@ FORMULA_SPECS = [
      "الرسم السوري الفعلي + الرسم العراقي الفعلي + مصروف طرفين",
      "syrian_actual + iraqi_actual + two_party_expense"),
     ("fee_adjust", "تسوية الحد الأدنى للأجور", "—",
-     "فرق يُضاف ليبلغ المجموع النهائي الحدَّ الأدنى (min_fee) للشحنات الخفيفة "
-     "(وزنها ≤ min_fee_max_weight): إن كان المجموع أقل من الحد يُكمَّل إليه، وإن بلغه فلا إضافة. "
-     "وأصناف الإعفاء (is_fee_exempt — مثل الأدوية) تُصفَّر أجورها بالكامل بفرق سالب.",
-     "(-(duties_only + tax_advance + consumption_fee + extra_fees)) if is_fee_exempt"
-     " else (max(0, min_fee - (duties_only + tax_advance + consumption_fee + extra_fees))"
-     " if weight_kg <= min_fee_max_weight else 0)"),
+     "فرق يُضاف ليبلغ المجموع النهائي الحدَّ الأدنى (min_fee) لأي شحنة مهما كان وزنها: "
+     "إن كان المجموع أقل من الحد يُكمَّل إليه، وإن بلغه أو تجاوزه فلا إضافة. "
+     "وتُصفَّر الأجور بالكامل (بفرق سالب) في حالتين: صنف معفى (is_fee_exempt — مثل الأدوية)، "
+     "أو شحنة دفعها «مجاناً» (is_free).",
+     "(-(duties_only + tax_advance + consumption_fee + extra_fees))"
+     " if (is_fee_exempt or is_free)"
+     " else max(0, min_fee - (duties_only + tax_advance + consumption_fee + extra_fees))"),
     ("fees_total", "أجور الشحن والجمركة (المجموع النهائي)", "حساب الجمارك!M5",
      "الرسوم + السلفة + رسم الإنفاق + الأجور الإضافية + تسوية الحد الأدنى",
      "duties_only + tax_advance + consumption_fee + extra_fees + fee_adjust"),
@@ -116,9 +118,10 @@ VARIABLE_DOCS = [
     ("two_party_expense_input", "مصروف الطرفين المُدخل يدوياً في نموذج الجمارك"),
     ("two_party_manual", "هل أُدخل مصروف الطرفين يدوياً؟ (True/False) — False يعني الحقل فارغ"),
     ("extra_fees", "أجور إضافية (دولار)"),
-    ("min_fee", "الحد الأدنى لأجور الشحن والجمركة (من الإعدادات)"),
-    ("min_fee_max_weight", "أقصى وزن (كغ) يسري عليه الحد الأدنى (من الإعدادات)"),
+    ("min_fee", "الحد الأدنى لأجور الشحن والجمركة (من الإعدادات) — يسري على كل الأوزان"),
+    ("min_fee_max_weight", "(مهجور) حدّ وزن قديم — يبقى متاحاً لنسخ المعادلات القديمة"),
     ("is_fee_exempt", "هل الصنف معفى من الأجور كلياً؟ (True/False) — قائمة الأصناف من الإعدادات"),
+    ("is_free", 'هل دفع الأجور «مجاناً»؟ (True/False) — تُصفَّر أجور الشحنة'),
     ("tax_advance_rate", "نسبة السلفة الضريبية (افتراضي 0.02)"),
     ("commission_rate", "نسبة العمولة (يدوية للشحنة أو الافتراضية 0.05)"),
     ("consumption_rate", "نسبة الإنفاق من جدول الشرائح"),
@@ -288,6 +291,12 @@ _SUPERSEDED = {
     "fees_total": [
         "duties_only + tax_advance + consumption_fee + extra_fees",
     ],
+    # الصيغة السابقة قصرت الحد الأدنى على الشحنات الخفيفة ولم تعرف خيار «مجاناً»
+    "fee_adjust": [
+        "(-(duties_only + tax_advance + consumption_fee + extra_fees)) if is_fee_exempt"
+        " else (max(0, min_fee - (duties_only + tax_advance + consumption_fee + extra_fees))"
+        " if weight_kg <= min_fee_max_weight else 0)",
+    ],
 }
 
 # قيم تُفعَّل مرة واحدة مع الترقية (قرار تشغيلي): حد أدنى 10$ للشحنات حتى 2 كغ،
@@ -297,7 +306,7 @@ _UPGRADE_VALUES = {"min_fee": 10.0, "min_fee_max_weight": 2.0,
 
 
 # رقم دفعة الترقية — زِدْه عند إضافة معادلات جديدة إلى _SUPERSEDED
-_UPGRADE_MARK = "calc_upgrade_applied_v4"
+_UPGRADE_MARK = "calc_upgrade_applied_v5"
 
 
 def upgrade_superseded_formulas(db) -> bool:
@@ -365,7 +374,8 @@ def _sample_vars() -> dict:
             "goods_value": 1000.0, "goods_price": 800.0,
             "two_party_per_ton": 10.0, "two_party_expense_input": 10.0,
             "two_party_manual": True, "extra_fees": 5.0,
-            "min_fee": 10.0, "min_fee_max_weight": 2.0, "is_fee_exempt": False,
+            "min_fee": 10.0, "min_fee_max_weight": 2.0,
+            "is_fee_exempt": False, "is_free": False,
             "tax_advance_rate": 0.02, "commission_rate": 0.05, "consumption_rate": 0.02,
             "is_company": True, "fees_payment": COD, "financing": COMPANY,
             "collection_status": COLLECTED, "delivery_status": DELIVERED}
@@ -443,9 +453,11 @@ def compute(sh, syrian_per_ton: float, iraqi_per_ton: float = 0.0,
         "extra_fees": sh.extra_fees or 0.0,
         # الحد الأدنى للأجور: يسري على الشحنات الخفيفة، والأصناف المعفاة أجورها صفر
         "min_fee": cfg.get("min_fee", 0.0),
+        # (مهجور في المعادلة الحالية — يبقى متاحاً لأن نسخاً قديمة مثبَّتة تستعمله)
         "min_fee_max_weight": cfg.get("min_fee_max_weight", 0.0),
         "is_fee_exempt": _norm_ar(sh.item_name) in {_norm_ar(n)
                                                     for n in cfg.get("fee_exempt_items", [])},
+        "is_free": (sh.fees_payment or "") == FREE,
         "tax_advance_rate": cfg["tax_advance_rate"],
         "commission_rate": crate,
         "consumption_rate": tier_rate(eff_syrian_per_ton, cfg["tiers"]),
