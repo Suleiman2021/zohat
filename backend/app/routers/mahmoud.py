@@ -490,15 +490,135 @@ def _auto_rows(db: Session, p: MBox) -> list[dict]:
         d["refs"].append(s.ref_no)
 
     # ما سُجِّل سابقاً لنفس الجهة ونفس تاريخ التصدير لا يُعرض كجديد (منع التكرار)
-    registered = {t.ref_no for t in _live(db, p.id)
-                  if t.txn_type == TXN_CHARGE and (t.ref_no or "").startswith(AUTO_REF)}
+    booked = {t.ref_no: t for t in _live(db, p.id)
+              if t.txn_type == TXN_CHARGE and (t.ref_no or "").startswith(AUTO_REF)}
     out = []
+    seen = set()
     for d in sorted(by_date.values(), key=lambda x: x["export_date"], reverse=True):
         ref = AUTO_REF + d["export_date"]
-        out.append({**d, "amount": round(d["amount"], 2), "ref_no": ref,
+        seen.add(ref)
+        old = booked.get(ref)
+        amount = round(d["amount"], 2)
+        out.append({**d, "amount": amount, "ref_no": ref,
                     "refs": "، ".join(str(r) for r in sorted(d["refs"])),
-                    "registered": ref in registered})
+                    "registered": old is not None,
+                    "booked_amount": round(old.amount, 2) if old else 0.0,
+                    # مسجَّل بمبلغ يخالف المحسوب الآن (تعديل لاحق على شحنة)
+                    "stale": bool(old and abs(old.amount - amount) > 0.01)})
+    # استحقاق مسجَّل لم يعد له مقابل محسوب (صفر الآن) — يجب أن يظهر كي يُصحَّح
+    for ref, old in booked.items():
+        if ref in seen:
+            continue
+        out.append({"export_date": ref[len(AUTO_REF):], "amount": 0.0, "count": 0,
+                    "refs": "", "ref_no": ref, "registered": True,
+                    "booked_amount": round(old.amount, 2), "stale": True})
+    out.sort(key=lambda r: r["export_date"], reverse=True)
     return out
+
+
+def _row_for(db: Session, p: MBox, export_date) -> dict | None:
+    return next((r for r in _auto_rows(db, p)
+                 if r["export_date"] == str(export_date)), None)
+
+
+def _party_by(db: Session, name: str, box_type: str) -> MBox | None:
+    name = (name or "").strip()
+    if not name:
+        return None
+    return db.exec(select(MBox).where(MBox.name == name,
+                                      MBox.box_type == box_type)).first()
+
+
+def resync_auto_charge(db: Session, party: MBox, export_date, user, why: str) -> dict | None:
+    """يوائم استحقاقاً تلقائياً **مسجَّلاً** مع القيمة المحسوبة الآن.
+
+    لا يُنشئ استحقاقاً لم يُسجَّل أصلاً — فذلك قرار المحاسب، ويظهر له في قائمة
+    «المتاح للتسجيل». والتصحيح يتم بإلغاء القيد القديم (يبقى أثره) وتسجيل بديل
+    بالمبلغ الصحيح، حفاظاً على سلسلة التدقيق."""
+    ref = AUTO_REF + str(export_date)
+    old = next((t for t in _live(db, party.id)
+                if t.txn_type == TXN_CHARGE and t.ref_no == ref), None)
+    if not old:
+        return None
+    row = _row_for(db, party, export_date)
+    new_amount = float(row["amount"]) if row else 0.0
+    if abs(new_amount - old.amount) < 0.01:
+        return None
+
+    who = user.full_name or user.username if user else "النظام"
+    old_amount = old.amount
+    old.is_void = True
+    old.void_reason = f"تعديل شحنة صادرة — {why}"
+    old.voided_by = who
+    old.voided_at = datetime.utcnow()
+    _audit(db, old.id, "إلغاء", {"السبب": old.void_reason,
+                                 "المبلغ السابق": old_amount,
+                                 "المبلغ المحسوب الآن": new_amount}, user)
+    db.add(old)
+
+    created = None
+    if new_amount > 0:
+        created = MTxn(party_id=party.id, txn_date=_as_date(str(export_date)) or date.today(),
+                       txn_type=TXN_CHARGE, amount=new_amount, reason="شحنة",
+                       description=f"استحقاق تلقائي مُصحَّح عن الشحنة الصادرة بتاريخ {export_date}"
+                                   f" ({row['count']} شحنة — قيود: {row['refs'][:200]})",
+                       ref_no=ref,
+                       notes=f"تصحيح آلي بعد {why} — كان {old_amount:g}",
+                       created_by=who)
+        db.add(created)
+    db.commit()
+    return {"party": party.name, "party_id": party.id, "export_date": str(export_date),
+            "old_amount": old_amount, "new_amount": new_amount,
+            "voided_txn": old.id, "reason": why}
+
+
+# انتقال المسؤولية يقع بين هاتين القيمتين فقط؛ التحوّل إلى «واصل نقداً» أو
+# «تم التحصيل» لا يُحرّك القيود تلقائياً (قرار المستخدم) بل يُعلَّم كفارق للمراجعة.
+_FEES_SWAP = {COD, DEFERRED}
+_COLL_SWAP = {NOT_COLLECTED, DEFERRED}
+
+
+def sync_after_shipment_edit(db: Session, sh: Shipment, before: dict, user) -> list[dict]:
+    """يُستدعى بعد تعديل شحنة **صادرة**: إن تبدّلت المسؤولية بين مكتب الوجهة
+    (ضد الدفع / لم يُحصَّل) والمرسِل (آجل)، تُصحَّح الاستحقاقات المسجَّلة للجهتين."""
+    if sh.export_status != EXPORTED or not sh.export_date:
+        return []
+    reasons = []
+    f_old, f_new = before.get("fees_payment"), sh.fees_payment
+    if f_old != f_new and {f_old, f_new} <= _FEES_SWAP:
+        reasons.append(f"دفع الأجور: {f_old} ← {f_new}")
+    c_old, c_new = before.get("collection_status"), sh.collection_status
+    if c_old != c_new and {c_old, c_new} <= _COLL_SWAP:
+        reasons.append(f"حالة التحصيل: {c_old} ← {c_new}")
+    if not reasons:
+        return []
+
+    why = "، ".join(reasons) + f" (القيد {sh.ref_no})"
+    out = []
+    for name, box_type in ((sh.to_city, BOX_OFFICE), (sh.sender_name, BOX_CUSTOMER)):
+        party = _party_by(db, name, box_type)
+        if not party:
+            continue
+        r = resync_auto_charge(db, party, sh.export_date, user, why)
+        if r:
+            out.append(r)
+    return out
+
+
+@router.post("/auto-charges/resync")
+def resync_endpoint(payload: dict, db: Session = Depends(get_session),
+                    user: User = Depends(admin_or_accountant)):
+    """مزامنة يدوية لاستحقاق مسجَّل خالف قيمته المحسوبة (زر «مزامنة»)."""
+    p = db.get(MBox, int(payload.get("party_id") or 0))
+    if not p:
+        raise HTTPException(404, "الجهة غير موجودة")
+    export_date = str(payload.get("export_date") or "").strip()
+    if not export_date:
+        raise HTTPException(400, "حدّد تاريخ التصدير")
+    r = resync_auto_charge(db, p, export_date, user, "مزامنة يدوية")
+    if not r:
+        return {"changed": False, "message": "الاستحقاق مطابق للقيمة المحسوبة — لا تغيير"}
+    return {"changed": True, **r, "party_balance": _balance(db, p.id)}
 
 
 @router.get("/auto-charges")

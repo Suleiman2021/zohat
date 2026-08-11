@@ -100,6 +100,8 @@ form.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
 .badge{padding:2px 9px;border-radius:20px;font-size:12px;font-weight:700;display:inline-block}
 .badge.pend{background:#fdecea;color:var(--warn)} .badge.done{background:#e8f5e9;color:var(--ok)}
 .badge.warn{background:#fff3cd;color:#8a6500}
+/* صف يحتاج انتباهاً: استحقاق مسجَّل يخالف قيمته المحسوبة */
+tr.warn-row td{background:#fffaf0}
 
 button.sm{padding:7px 12px;font-size:12px;border-radius:8px;border:1px solid var(--line);
   background:#fff;font-weight:600}

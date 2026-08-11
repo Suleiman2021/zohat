@@ -493,7 +493,10 @@ function renderShip(rows, tab, load){
       <span id="selCount">0 محدَّدة</span>
       ${canExport?`<label>تاريخ الإصدار<input type="date" id="expDate" value="${today()}"></label>
         <button class="primary" id="doExport">🚚 تصدير المحدَّد إلى الوجهة</button>`:''}
-      ${canBulkExported?`<button class="primary" id="doUnexport">↩ إرجاع المحدَّد إلى قيد التصدير</button>`:''}
+      ${canBulkExported?`<label>تاريخ الإصدار الجديد<input type="date" id="newExpDate" value="${
+          rows.find(r=>r.export_date)?.export_date || today()}"></label>
+        <button class="primary" id="doRedate">📅 تعديل تاريخ الإصدار للمحدَّد</button>
+        <button class="sm" id="doUnexport">↩ إرجاع المحدَّد إلى قيد التصدير</button>`:''}
       ${canBulkDelete?`<button class="sm danger" id="doBulkDel">🗑 حذف المحدَّد نهائياً</button>`:''}
     </div>`;
     const boxes=()=>[...$("#tbl").querySelectorAll(".rsel")];
@@ -512,6 +515,17 @@ function renderShip(rows, tab, load){
       try{
         const r=await API.post("/api/shipments/export",{ids, export_date:$("#expDate").value, status:EXPORTED});
         toast(`تم تصدير ${r.updated} شحنة إلى الوجهة`); load();
+      }catch(err){ toast(err.message, true); }
+    };
+    // تعديل تاريخ الإصدار للمحدَّد — يبقى «تم التصدير» ويتغيّر تاريخه فقط
+    if($("#doRedate")) $("#doRedate").onclick=async()=>{
+      const ids=picked(), d=$("#newExpDate").value;
+      if(!ids.length){ toast("حدّد شحنة واحدة على الأقل", true); return; }
+      if(!d){ toast("اختر تاريخ الإصدار الجديد", true); return; }
+      if(!confirm(`تعديل تاريخ الإصدار لـ${ids.length} شحنة إلى ${d}؟`)) return;
+      try{
+        const r=await API.post("/api/shipments/export",{ids, export_date:d, status:EXPORTED});
+        toast(`عُدِّل تاريخ إصدار ${r.updated} شحنة إلى ${d}`); load();
       }catch(err){ toast(err.message, true); }
     };
     if($("#doUnexport")) $("#doUnexport").onclick=async()=>{
@@ -593,7 +607,9 @@ function shipForm(done, sh, prefill){
     <label>جهة الاستلام<select name="to_city" id="tocity">${opts(CITIES, d.to_city)}</select>
       ${isEdit?`<button class="sm" type="button" id="propTo" style="margin-top:6px">
         ⇉ تعميم على كل شحنات هذا المستلِم</button>`:''}</label>
-    <label>دفع أجور الشحن والجمركة<select name="fees_payment">${opts(PAY, d.fees_payment)}</select></label>
+    <label>دفع أجور الشحن والجمركة<select name="fees_payment">${opts(PAY, d.fees_payment)}</select>
+      ${isEdit?`<button class="sm" type="button" data-prop="fees_payment" style="margin-top:6px">
+        ⇉ تعميم على كل شحنات هذا المستلِم</button>`:''}</label>
     ${isEdit?`
     <label>حالة التصدير<select name="export_status" ${noExport?'disabled':''}
       class="${noExport?'derived':''}">${opts(EXPORT_ST, d.export_status)}</select>
@@ -602,7 +618,9 @@ function shipForm(done, sh, prefill){
       ${noExport?'disabled class="derived"':''}></label>
     <label>حالة التسليم<select name="delivery_status">${opts(DELIVERY, d.delivery_status)}</select></label>
     <label>تاريخ التسليم<input type="date" name="delivery_date" value="${d.delivery_date||''}"></label>
-    <label>حالة التحصيل<select name="collection_status">${opts(COLLECTION, d.collection_status)}</select></label>
+    <label>حالة التحصيل<select name="collection_status">${opts(COLLECTION, d.collection_status)}</select>
+      <button class="sm" type="button" data-prop="collection_status" style="margin-top:6px">
+        ⇉ تعميم على كل شحنات هذا المستلِم</button></label>
     `:''}
     <div style="grid-column:1/-1" class="btn-row">
       <button class="primary" type="submit">${isEdit?'حفظ التعديلات':'حفظ'}</button>
@@ -621,41 +639,61 @@ function shipForm(done, sh, prefill){
   $("#gprice").addEventListener("input", syncFin); syncFin();
   $("#cancel").onclick=done;
 
-  // تعميم جهة الاستلام على بقية شحنات نفس المستلِم ضمن نفس الدفعة:
+  // تعميم حقل على بقية شحنات نفس المستلِم ضمن نفس الدفعة:
   // قيد التصدير ← كل شحناته قيد التصدير. مُصدَّرة ← المصدَّرة بنفس التاريخ فقط.
-  if($("#propTo")) $("#propTo").onclick=async()=>{
-    const btn=$("#propTo"), city=$("#tocity").value;
-    const exported = sh.export_status===EXPORTED;
-    const scope = exported
-      ? `المُصدَّرة بتاريخ ${sh.export_date||"—"} فقط`
-      : "التي ما زالت قيد التصدير";
-    if(!confirm(`تعميم جهة الاستلام «${city}» على كل شحنات المستلِم `+
-      `«${sh.receiver_name||"—"}» ${scope}؟\n\nسيُحفظ التعديل الحالي أولاً.`)) return;
-    btn.disabled=true; btn.textContent="جارٍ التعميم…";
-    try{
-      await save();                       // يُحفظ اختيار المدينة أولاً ثم يُعمَّم
-      const r=await API.post(`/api/shipments/${sh.id}/propagate-destination`,{});
-      toast(r.updated
-        ? `عُدِّلت ${r.updated} شحنة أخرى لـ«${r.receiver}» إلى ${r.to_city} (${r.scope})`
-        : "لا توجد شحنات أخرى بحاجة تعديل ضمن هذا النطاق");
-      done();
-    }catch(err){
-      toast(err.message, true);
-      btn.disabled=false; btn.textContent="⇉ تعميم على كل شحنات هذا المستلِم";
-    }
-  };
+  const PROP_LABEL={to_city:"جهة الاستلام", fees_payment:"دفع أجور الشحن والجمركة",
+                    collection_status:"حالة التحصيل"};
+  const propBtns=[...v.querySelectorAll("[data-prop]")];
+  if($("#propTo")) propBtns.push($("#propTo"));       // زر جهة الاستلام (معرّفه خاص)
+  propBtns.forEach(btn=>{
+    const field = btn.dataset.prop || "to_city";
+    btn.onclick=async()=>{
+      const el = $("#f").elements[field];
+      const value = el ? el.value : "";
+      const scope = sh.export_status===EXPORTED
+        ? `المُصدَّرة بتاريخ ${sh.export_date||"—"} فقط`
+        : "التي ما زالت قيد التصدير";
+      if(!confirm(`تعميم ${PROP_LABEL[field]} «${value}» على كل شحنات المستلِم `+
+        `«${sh.receiver_name||"—"}» ${scope}؟\n\nسيُحفظ التعديل الحالي أولاً.`)) return;
+      const txt=btn.textContent;
+      btn.disabled=true; btn.textContent="جارٍ التعميم…";
+      try{
+        await save();                     // يُحفظ اختيار الحقل أولاً ثم يُعمَّم
+        const r=await API.post(`/api/shipments/${sh.id}/propagate`, {field});
+        let msg = r.updated
+          ? `عُدِّلت ${r.updated} شحنة أخرى لـ«${r.receiver}» — ${r.field_label}: ${r.value} (${r.scope})`
+          : "لا توجد شحنات أخرى بحاجة تعديل ضمن هذا النطاق";
+        if(r.mahmoud_changes && r.mahmoud_changes.length)
+          msg += ` — وصُحِّح ${r.mahmoud_changes.length} استحقاق في حسابات محمود`;
+        toast(msg);
+        done();
+      }catch(err){
+        toast(err.message, true);
+        btn.disabled=false; btn.textContent=txt;
+      }
+    };
+  });
 
+  let lastSaved=null;                     // رد الخادم لآخر حفظ (لرسالة مواءمة محمود)
   const save=async()=>{
     const fd=Object.fromEntries(new FormData($("#f")));
     ["count","weight_kg","goods_value","goods_price","extra_fees"].forEach(k=>fd[k]=Number(fd[k]||0));
-    if(isEdit) await API.put(`/api/shipments/${sh.id}`, fd);
-    else await API.post("/api/shipments",fd);
+    lastSaved = isEdit ? await API.put(`/api/shipments/${sh.id}`, fd)
+                       : await API.post("/api/shipments",fd);
     return fd;
   };
   $("#f").addEventListener("submit",async e=>{
     e.preventDefault();
-    try{ await save(); toast(isEdit?"تم حفظ التعديلات":"تم تسجيل الشحنة"); done(); }
-    catch(err){ toast(err.message, true); }
+    try{
+      await save();
+      // تبدّل ضد الدفع ↔ آجل يصحّح استحقاقات محمود تلقائياً — نُعلم المستخدم
+      const ch=(lastSaved&&lastSaved.mahmoud_changes)||[];
+      toast(ch.length
+        ? `تم الحفظ — وصُحِّح ${ch.length} استحقاق في حسابات محمود (${
+            ch.map(c=>`${c.party}: ${money(c.old_amount)}←${money(c.new_amount)}`).join("، ")})`
+        : (isEdit?"تم حفظ التعديلات":"تم تسجيل الشحنة"));
+      done();
+    }catch(err){ toast(err.message, true); }
   });
   // حفظ ثم إعادة فتح النموذج ببيانات الزبون نفسها (صنف آخر لنفس الشحنة/الزبون).
   // يعمل في التعديل أيضاً: يُحفظ التعديل ثم يُفتح نموذج شحنة **جديدة** — وهي دائماً
@@ -1670,18 +1708,38 @@ async function loadAutoCharges(pid, refresh){
       +wrapTable(`<table><thead><tr>
         <th>تاريخ الشحنة الصادرة</th><th>عدد الشحنات</th><th>أرقام القيود</th>
         <th>قيمة الاستحقاق</th><th>الحالة</th><th></th></tr></thead>
-      <tbody>${d.rows.map(r=>`<tr>
+      <tbody>${d.rows.map(r=>`<tr class="${r.stale?'warn-row':''}">
         <td class="nowrap"><b>${r.export_date}</b></td><td>${r.count}</td>
-        <td class="mini">${r.refs}</td><td><b>${money(r.amount)}</b></td>
-        <td>${r.registered?'<span class="badge done">مسجَّل</span>'
-                          :'<span class="badge pend">غير مسجَّل</span>'}</td>
-        <td>${r.registered?"":`<button class="sm primary" data-reg="${r.export_date}">＋ تسجيل الاستحقاق</button>`}</td>
+        <td class="mini">${r.refs}</td>
+        <td><b>${money(r.amount)}</b>${r.stale
+            ? `<div class="mini neg">المسجَّل: ${money(r.booked_amount)}</div>` : ""}</td>
+        <td>${r.stale?'<span class="badge warn">يخالف المحسوب</span>'
+             :(r.registered?'<span class="badge done">مسجَّل</span>'
+                           :'<span class="badge pend">غير مسجَّل</span>')}</td>
+        <td class="nowrap">${r.stale
+            ? `<button class="sm primary" data-sync="${r.export_date}">⟳ مزامنة</button>`
+            : (r.registered?"":`<button class="sm primary" data-reg="${r.export_date}">＋ تسجيل الاستحقاق</button>`)}</td>
       </tr>`).join("")}</tbody></table>`);
+    if(d.rows.some(r=>r.stale))
+      box.insertAdjacentHTML("beforeend", `<p class="hint neg">⚠ استحقاق مسجَّل بمبلغ
+        يخالف المحسوب الآن — غالباً بعد تعديل شحنة إلى «واصل نقداً» أو «تم التحصيل».
+        اضغط «مزامنة» لتصحيحه (يُلغى القديم ويُسجَّل بديل بالمبلغ الصحيح).</p>`);
     box.querySelectorAll("[data-reg]").forEach(b=>b.onclick=async()=>{
       if(!confirm(`تسجيل استحقاق الشحنة الصادرة بتاريخ ${b.dataset.reg}؟`)) return;
       try{
         const r=await API.post("/api/mahmoud/auto-charges",{party_id:pid, export_date:b.dataset.reg});
         toast(`سُجِّل الاستحقاق — الرصيد الجديد ${money(r.party_balance)}`); refresh();
+      }catch(err){ toast(err.message, true); }
+    });
+    box.querySelectorAll("[data-sync]").forEach(b=>b.onclick=async()=>{
+      if(!confirm(`مزامنة استحقاق ${b.dataset.sync} مع القيمة المحسوبة الآن؟\n\n`+
+        `سيُلغى القيد الحالي (يبقى أثره في الكشف) ويُسجَّل بديل بالمبلغ الصحيح.`)) return;
+      try{
+        const r=await API.post("/api/mahmoud/auto-charges/resync",
+          {party_id:pid, export_date:b.dataset.sync});
+        toast(r.changed ? `صُحِّح الاستحقاق: ${money(r.old_amount)} ← ${money(r.new_amount)}`
+                        : r.message);
+        refresh();
       }catch(err){ toast(err.message, true); }
     });
   }catch(err){ box.innerHTML=empty(err.message); }

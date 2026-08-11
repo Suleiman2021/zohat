@@ -1,5 +1,5 @@
 // Service Worker — الشبكة أولاً لملفات الواجهة (تصل التحديثات فوراً)، والكاش احتياطي دون إنترنت
-const CACHE = "zohat-v53";
+const CACHE = "zohat-v54";
 const SHELL = ["./","index.html","css/style.css","js/api.js","js/app.js","manifest.json",
                "icons/logo.svg","icons/logo-white.svg"];
 

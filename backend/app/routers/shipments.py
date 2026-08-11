@@ -84,6 +84,17 @@ def _visible(user: User, q):
     return q
 
 
+def _sync_mahmoud(db: Session, sh: Shipment, before: dict, user: User) -> list:
+    """يوائم استحقاقات «حسابات محمود» بعد تبدّل مسؤولية شحنة صادرة.
+    الاستيراد داخل الدالة تفادياً لدورة استيراد بين الموجّهين."""
+    try:
+        from .mahmoud import sync_after_shipment_edit
+        return sync_after_shipment_edit(db, sh, before, user)
+    except Exception as e:      # المحاسبة اليدوية لا يجوز أن تُفشل تعديل الشحنة
+        print(f"[!] تعذّرت مواءمة حسابات محمود للقيد {sh.ref_no}: {e}")
+        return []
+
+
 def _assert_collector_city(user: User, sh: Shipment):
     """عزل مسؤول التجميع لا يكفي إخفاءً في القوائم — يجب منع الوصول بالمعرِّف أيضاً،
     وإلا عدّل شحنة مدينة أخرى لو عرف رقمها."""
@@ -230,19 +241,41 @@ def export_shipments(payload: dict, db: Session = Depends(get_session),
     return {"updated": done}
 
 
+# الحقول القابلة للتعميم على شحنات نفس المستلِم: (المفتاح، الاسم المعروض)
+PROPAGATE_FIELDS = {"to_city": "جهة الاستلام",
+                    "fees_payment": "دفع أجور الشحن والجمركة",
+                    "collection_status": "حالة التحصيل"}
+
+
 @router.post("/{sid}/propagate-destination")
 def propagate_destination(sid: int, db: Session = Depends(get_session),
                           user: User = Depends(any_role)):
-    """تعميم جهة الاستلام على بقية شحنات نفس المستلِم ضمن نفس الدفعة:
+    """(مسار قديم) تعميم جهة الاستلام — يوجّه إلى التعميم العام."""
+    return propagate_field(sid, {"field": "to_city"}, db, user)
+
+
+@router.post("/{sid}/propagate")
+def propagate_field(sid: int, payload: dict, db: Session = Depends(get_session),
+                    user: User = Depends(any_role)):
+    """تعميم حقل على بقية شحنات نفس المستلِم ضمن نفس الدفعة:
     • الشحنة قيد التصدير ← كل شحنات المستلِم التي ما زالت قيد التصدير.
     • الشحنة مُصدَّرة     ← شحنات المستلِم المصدَّرة **بنفس تاريخ التصدير فقط**،
-      فلا يمتدّ التعديل إلى دفعات أخرى للزبون نفسه."""
+      فلا يمتدّ التعديل إلى دفعات أخرى للزبون نفسه.
+    وتعديل حالات الدفع/التحصيل على شحنات صادرة يُوائم استحقاقات حسابات محمود."""
+    field = str(payload.get("field") or "to_city")
+    if field not in PROPAGATE_FIELDS:
+        raise HTTPException(400, "حقل غير قابل للتعميم")
     sh = db.get(Shipment, sid)
     if not sh:
         raise HTTPException(404, "الشحنة غير موجودة")
     _assert_collector_city(user, sh)
     if user.role in (ROLE_BROKER, ROLE_COLLECTOR) and sh.export_status == EXPORTED:
         raise HTTPException(403, "لا تملك صلاحية تعديل الشحنات المُصدَّرة")
+    # التعميم لا يمنح صلاحية لا يملكها المستخدم على الحقل نفسه
+    if user.role == ROLE_BROKER and field not in BROKER_FIELDS:
+        raise HTTPException(403, "لا تملك صلاحية تعديل هذا الحقل")
+    if user.role == ROLE_ACCOUNTANT and field not in ACCOUNTANT_FIELDS:
+        raise HTTPException(403, "لا تملك صلاحية تعديل هذا الحقل")
     name = (sh.receiver_name or "").strip()
     if not name:
         raise HTTPException(400, "الشحنة بلا اسم مستلِم — لا يمكن التعميم")
@@ -255,21 +288,33 @@ def propagate_destination(sid: int, db: Session = Depends(get_session),
         q = q.where(Shipment.export_date == sh.export_date)
     q = _visible(user, q)
 
-    updated, skipped = 0, 0
+    value = getattr(sh, field)
+    updated, skipped, synced = 0, 0, []
     for other in db.exec(q).all():
-        if other.id == sh.id or other.to_city == sh.to_city:
+        if other.id == sh.id or getattr(other, field) == value:
             continue
         # الفرع لا يعدّل إلا شحنات أنشأها مصدره
         if user.role == ROLE_BRANCH and other.from_city != user.branch:
             skipped += 1
             continue
-        other.to_city = sh.to_city
+        before = {"fees_payment": other.fees_payment,
+                  "collection_status": other.collection_status}
+        setattr(other, field, value)
         db.add(other); updated += 1
+        if field != "to_city":
+            synced.append((other, before))
     db.commit()
+    # مواءمة استحقاقات حسابات محمود لكل شحنة تبدّلت مسؤوليتها
+    changes = []
+    for other, before in synced:
+        db.refresh(other)
+        changes += _sync_mahmoud(db, other, before, user)
     scope = (f"المُصدَّرة بتاريخ {sh.export_date}" if sh.export_status == EXPORTED
              else "قيد التصدير")
-    return {"updated": updated, "skipped": skipped, "to_city": sh.to_city,
-            "receiver": name, "scope": scope}
+    return {"updated": updated, "skipped": skipped, "field": field,
+            "field_label": PROPAGATE_FIELDS[field], "value": value,
+            "to_city": sh.to_city, "receiver": name, "scope": scope,
+            "mahmoud_changes": changes}
 
 
 @router.post("/{sid}/customs/preview")
@@ -331,6 +376,9 @@ def update_shipment(sid: int, patch: dict, db: Session = Depends(get_session),
         if sh.export_status == EXPORTED:
             raise HTTPException(403, "الشحنة مُصدَّرة — لا يمكن لمسؤول التجميع تعديلها")
         allowed -= CUSTOMS_FIELDS | EXPORT_FIELDS
+    # الحالتان اللتان تحدّدان مَن عليه الاستحقاق في حسابات محمود — نلتقطهما قبل التعديل
+    before = {"fees_payment": sh.fees_payment,
+              "collection_status": sh.collection_status}
     for k in allowed:
         if hasattr(sh, k):
             val = patch[k]
@@ -345,7 +393,12 @@ def update_shipment(sid: int, patch: dict, db: Session = Depends(get_session),
     if "goods_price" in allowed:
         _sync_financing(sh)       # التمويل يتبع ثمن البضاعة دائماً
     db.add(sh); db.commit(); db.refresh(sh)
-    return _enrich(db, sh)
+    # تبدّل المسؤولية (ضد الدفع ↔ آجل، لم يُحصَّل ↔ آجل) يصحّح استحقاقات محمود
+    changes = _sync_mahmoud(db, sh, before, user)
+    out = _enrich(db, sh)
+    if changes:
+        out["mahmoud_changes"] = changes
+    return out
 
 
 @router.post("/bulk-delete")
