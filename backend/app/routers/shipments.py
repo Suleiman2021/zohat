@@ -72,6 +72,13 @@ def _fill_item_code(db: Session, sh: Shipment):
             sh.item_code = it.code or ""
 
 
+def _freeze_special(db: Session, sh: Shipment):
+    """يثبّت وسم «جدول 10%» على الشحنة من حالة الصنف الآن.
+    يُستدعى عند التسجيل وعند تبديل صنف الشحنة فقط — فنقل صنف بين الجدولين
+    لاحقاً لا يمسّ أرقام الشحنات المسجَّلة قبل النقل."""
+    sh.special_consumption = _item_rates(db, sh.item_name)[2]
+
+
 def _visible(user: User, q):
     """عزل البيانات: الفرع يرى ما أرسله (from_city) أو ما يصله (to_city).
     ومسؤول التجميع المرتبط بمدينة يرى شحنات مدينته فقط (جهة الإرسال).
@@ -108,9 +115,10 @@ def _enrich(db, sh: Shipment, resolve=None) -> dict:
     """يحسب الشحنة بمعادلات النسخة المثبَّتة عليها وقت تسجيلها (لا بالنسخة الحالية)."""
     resolve = resolve or cfg_resolver(db)
     d = sh.dict()
-    syr, irq, special = _item_rates(db, sh.item_name)
-    d.update(compute(sh, syr, irq, resolve(sh.calc_version_id), special))
-    d["special_consumption"] = special
+    syr, irq, _ = _item_rates(db, sh.item_name)
+    # الوسم يُقرأ من الشحنة نفسها (مجمَّد وقت تسجيلها) لا من حالة الصنف الآن
+    d.update(compute(sh, syr, irq, resolve(sh.calc_version_id),
+                     bool(sh.special_consumption)))
     return d
 
 
@@ -209,6 +217,7 @@ def create_shipment(sh: Shipment, db: Session = Depends(get_session),
     sh.created_by = user.username
     sh.created_by_name = user.full_name or user.username
     _fill_item_code(db, sh)
+    _freeze_special(db, sh)   # وسم «جدول 10%» يُثبَّت بحالة الصنف الآن
     _sync_financing(sh)   # التمويل مشتق من ثمن البضاعة
     # تثبيت نسخة المعادلات السارية الآن — أي تعديل لاحق عليها لن يمسّ هذه الشحنة
     resolve = cfg_resolver(db)
@@ -331,7 +340,9 @@ def preview_customs(sid: int, patch: dict, db: Session = Depends(get_session),
     allowed = (CUSTOMS_FIELDS - {"customs_computed"}) | {"two_party_auto"}
     patch = {k: v for k, v in patch.items() if k in allowed}
     temp = sh.model_copy(update=patch)
-    syr, irq, special = _item_rates(db, temp.item_name)
+    syr, irq, _ = _item_rates(db, temp.item_name)
+    # المعاينة تعكس ما هو مُثبَّت على الشحنة (لا حالة الصنف الحالية)
+    special = bool(temp.special_consumption)
     return {**compute(temp, syr, irq, calc_cfg(db), special),
             "special_consumption": special}
 
@@ -393,6 +404,7 @@ def update_shipment(sid: int, patch: dict, db: Session = Depends(get_session),
         sh.branch = sh.from_city
     if "item_name" in allowed:
         _fill_item_code(db, sh)   # صنف جديد بلا كود → اجلب كوده من قاعدة الأصناف
+        _freeze_special(db, sh)   # وتبديل الصنف يعيد تثبيت وسم «جدول 10%» عليه
     if "goods_price" in allowed:
         _sync_financing(sh)       # التمويل يتبع ثمن البضاعة دائماً
     db.add(sh); db.commit(); db.refresh(sh)

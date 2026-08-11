@@ -32,6 +32,11 @@ def db_file_path() -> str | None:
 # ترحيل خفيف: أعمدة أُضيفت لاحقاً على جداول موجودة مسبقاً (SQLite لا يضيفها تلقائياً)
 # (اسم العمود، تعريف SQL) — يُضاف فقط إن كان غائباً حتى لا نفقد بيانات المستخدم.
 _MIGRATIONS = {
+    # «item» أولاً: ترحيل الشحنات يقرأ عمود الصنف الجديد، فيجب أن يكون موجوداً
+    "item": [
+        ("iraqi_per_ton", "FLOAT DEFAULT 0"),
+        ("special_consumption", "INTEGER DEFAULT 0"),
+    ],
     "shipment": [
         ("export_status", "TEXT DEFAULT 'قيد التصدير'"),
         ("export_date", "DATE"),
@@ -46,9 +51,6 @@ _MIGRATIONS = {
         ("driver_name", "TEXT DEFAULT ''"),
         ("calc_version_id", "INTEGER"),
         ("two_party_auto", "INTEGER DEFAULT 1"),
-    ],
-    "item": [
-        ("iraqi_per_ton", "FLOAT DEFAULT 0"),
         ("special_consumption", "INTEGER DEFAULT 0"),
     ],
     "mbox": [
@@ -80,6 +82,12 @@ def _run_migrations():
                     if table == "shipment" and name == "two_party_auto":
                         conn.execute(text("UPDATE shipment SET two_party_auto = 0 "
                                           "WHERE two_party_expense IS NOT NULL AND two_party_expense <> 0"))
+                    # تجميد وسم «جدول 10%» على الشحنات القائمة بحالته الحالية،
+                    # فلا تتغيّر أرقام أي شحنة لحظة الترقية — ومن بعدها لا يمسّها نقل الأصناف
+                    if table == "shipment" and name == "special_consumption":
+                        conn.execute(text(
+                            "UPDATE shipment SET special_consumption = 1 WHERE item_name IN "
+                            "(SELECT name FROM item WHERE special_consumption = 1)"))
         for table, drops in _DROP_COLUMNS.items():
             if table not in tables:
                 continue

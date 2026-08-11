@@ -22,8 +22,10 @@ def _rows(db, date_from, date_to, branch):
     for s in db.exec(q).all():
         if branch and branch not in (s.from_city, s.to_city, s.branch):
             continue
-        syr, irq, special = items.get(s.item_name, (0.0, 0.0, False))
-        out.append((s, compute(s, syr, irq, resolve(s.calc_version_id), special)))
+        syr, irq, _ = items.get(s.item_name, (0.0, 0.0, False))
+        # وسم «جدول 10%» مجمَّد على الشحنة وقت تسجيلها
+        out.append((s, compute(s, syr, irq, resolve(s.calc_version_id),
+                               bool(s.special_consumption))))
     return out
 
 

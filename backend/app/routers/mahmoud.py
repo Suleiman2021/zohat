@@ -457,8 +457,8 @@ def _computed_exported(db: Session):
     q = select(Shipment).where(Shipment.export_status == EXPORTED,
                                Shipment.export_date != None)          # noqa: E711
     for s in db.exec(q).all():
-        syr, irq, special = items.get(s.item_name, (0.0, 0.0, False))
-        c = compute(s, syr, irq, resolve(s.calc_version_id), special)
+        syr, irq, _ = items.get(s.item_name, (0.0, 0.0, False))
+        c = compute(s, syr, irq, resolve(s.calc_version_id), bool(s.special_consumption))
         yield s, c, (s.goods_price or 0.0) + c.get("commission", 0.0)
 
 
@@ -765,8 +765,8 @@ def _actual_customs(db: Session, date_from, date_to) -> dict:
     syrian = iraqi = 0.0
     count = 0
     for s in db.exec(q).all():
-        syr, irq, special = items.get(s.item_name, (0.0, 0.0, False))
-        c = compute(s, syr, irq, resolve(s.calc_version_id), special)
+        syr, irq, _ = items.get(s.item_name, (0.0, 0.0, False))
+        c = compute(s, syr, irq, resolve(s.calc_version_id), bool(s.special_consumption))
         syrian += c["syrian_actual"]; iraqi += c["iraqi_actual"]; count += 1
     return {"syrian": round(syrian, 2), "iraqi": round(iraqi, 2), "count": count}
 
