@@ -312,12 +312,15 @@ async function vShipments(){
   // مسؤول التجميع المرتبط بمدينة: كل ما يراه من مدينته، فيُسمّى التبويب باسمها
   const myCity = (API.role==="collector" && API.branch) ? API.branch : "";
   const v=$("#view");
+  // الحالة محفوظة بين الزيارات: العودة من نموذج الشحنة تُرجعك لنفس التبويب والمجلد والفلاتر
+  const st = viewState("shipments", {tab:"قيد التصدير", drill:{y:null,m:null,d:null}, f:{}});
+  const segBtn=(t,l)=>`<button class="seg-btn ${st.tab===t?'active':''}" data-tab="${t}">${l}</button>`;
   v.innerHTML=`<h1>سجل الشحنات${myCity?` — ${myCity}`:""}</h1>
    <div class="card">
      <div class="seg" id="seg">
-       <button class="seg-btn active" data-tab="قيد التصدير">قيد التصدير</button>
-       <button class="seg-btn" data-tab="تم التصدير">${myCity?`الصادر من ${myCity}`:"مصدّرة"}</button>
-       <button class="seg-btn" data-tab="">الكل</button>
+       ${segBtn("قيد التصدير","قيد التصدير")}
+       ${segBtn("تم التصدير", myCity?`الصادر من ${myCity}`:"مصدّرة")}
+       ${segBtn("","الكل")}
      </div>
      <div class="filters">
        <label>من تاريخ<input type="date" id="df"></label>
@@ -333,13 +336,16 @@ async function vShipments(){
      <div id="exportbar"></div>
      <div id="tbl"></div>
    </div>`;
-  let tab="قيد التصدير";
-  let drill={y:null, m:null, d:null};      // تنقّل المصدَّرة: سنة ← شهر ← يوم
+  const SIDS=["df","dt","tc","snd","sfrom","sitem"];
+  const saveFilters = bindFilters(SIDS, st.f);   // استعادة الفلاتر المحفوظة فوراً
+  let tab=st.tab;
+  let drill=st.drill;                      // تنقّل المصدَّرة: سنة ← شهر ← يوم
 
   const anyFilter=()=>[$("#df").value,$("#dt").value,$("#tc").value,
                        $("#snd").value.trim(),$("#sfrom").value.trim(),
                        $("#sitem").value.trim()].some(Boolean);
   const load=async(fromSearch)=>{
+    saveFilters();
     const params={date_from:$("#df").value,date_to:$("#dt").value,
       to_city:$("#tc").value,receiver:$("#snd").value,sender:$("#sfrom").value,
       item:$("#sitem").value};
@@ -355,17 +361,31 @@ async function vShipments(){
     }
   };
   $("#seg").querySelectorAll(".seg-btn").forEach(b=>b.onclick=()=>{
-    tab=b.dataset.tab;
-    drill={y:null, m:null, d:null};           // ابدأ من مستوى السنوات عند تبديل التبويب
+    tab=st.tab=b.dataset.tab;
+    drill=st.drill={y:null, m:null, d:null};  // ابدأ من مستوى السنوات عند تبديل التبويب
     $("#seg").querySelectorAll(".seg-btn").forEach(x=>x.classList.toggle("active",x===b));
     load();
   });
-  const SIDS=["df","dt","tc","snd","sfrom","sitem"];
   liveFilters(SIDS, ()=>load(true));        // فلترة فورية بلا زر بحث
   $("#clr").onclick=()=>{ SIDS.forEach(id=>{const e=$("#"+id); if(e) e.value="";});
-    drill={y:null,m:null,d:null}; load(); };
+    drill=st.drill={y:null,m:null,d:null}; load(); };
   if($("#add")) $("#add").onclick=()=>shipForm(vShipments);
   load();
+}
+
+// ===== حفظ حالة كل واجهة (تبويب/مجلد/فلاتر) =====
+// عند الخروج من واجهة إلى نموذج والعودة منه، تعود الواجهة كما تركتها بالضبط
+// بدل الرجوع إلى أول تبويب — أي «خطوة واحدة للوراء» لا عدة خطوات.
+const VSTATE = {};
+const viewState = (key, init) => (VSTATE[key] = VSTATE[key] || init);
+// يستعيد قيم حقول الفلترة المحفوظة، ويعيد دالة تحفظها عند كل تغيير
+function bindFilters(ids, store){
+  ids.forEach(id=>{ const e=$("#"+id); if(!e) return;
+    const v=store[id];
+    if(v!=null){ if(e.type==="checkbox") e.checked=!!v; else e.value=v; }
+  });
+  return ()=>ids.forEach(id=>{ const e=$("#"+id); if(!e) return;
+    store[id] = e.type==="checkbox" ? e.checked : e.value; });
 }
 
 // تاريخ التصنيف: تاريخ التصدير، وإن غاب فتاريخ الشحنة
@@ -660,13 +680,16 @@ function shipForm(done, sh, prefill){
       try{
         await save();                     // يُحفظ اختيار الحقل أولاً ثم يُعمَّم
         const r=await API.post(`/api/shipments/${sh.id}/propagate`, {field});
+        if(lastSaved) Object.assign(sh, lastSaved);   // النطاق يتبع الحالة المحفوظة
         let msg = r.updated
           ? `عُدِّلت ${r.updated} شحنة أخرى لـ«${r.receiver}» — ${r.field_label}: ${r.value} (${r.scope})`
           : "لا توجد شحنات أخرى بحاجة تعديل ضمن هذا النطاق";
         if(r.mahmoud_changes && r.mahmoud_changes.length)
           msg += ` — وصُحِّح ${r.mahmoud_changes.length} استحقاق في حسابات محمود`;
         toast(msg);
-        done();
+        // نبقى في النموذج كي يمكن تعميم حقول أخرى — الخروج بـ«حفظ التعديلات» وحده
+        btn.textContent="✓ عُمِّم";
+        setTimeout(()=>{ btn.disabled=false; btn.textContent=txt; }, 1800);
       }catch(err){
         toast(err.message, true);
         btn.disabled=false; btn.textContent=txt;
@@ -866,13 +889,15 @@ const BROKER_COLS=[
 ];
 async function vBroker(){
   const v=$("#view");
+  // الحالة محفوظة: العودة من تعديل صف تُرجعك لنفس التبويب والمجلد
+  const bst = viewState("broker", {tab:"exported", drill:{y:null,m:null,d:null},
+                                   recentDay:null, f:{}});
   v.innerHTML=`<h1>التخليص الجمركي</h1>
     <div class="card no-print">
       <div class="seg" id="bseg">
-        <button class="seg-btn active" data-tab="exported">المصدَّرة</button>
-        <button class="seg-btn" data-tab="recent">المصدَّرة حديثاً</button>
-        <button class="seg-btn" data-tab="pending">قيد التصدير</button>
-        <button class="seg-btn" data-tab="">الكل</button>
+        ${[["exported","المصدَّرة"],["recent","المصدَّرة حديثاً"],
+           ["pending","قيد التصدير"],["","الكل"]].map(([t,l])=>
+          `<button class="seg-btn ${bst.tab===t?'active':''}" data-tab="${t}">${l}</button>`).join("")}
       </div>
       <div class="filters">
         <label>من تاريخ<input type="date" id="bdf"></label>
@@ -886,9 +911,11 @@ async function vBroker(){
     <div class="only-print">${brandHead()}</div>
     <div id="bdrill" class="no-print"></div>
     <div class="card"><div id="btbl"></div></div>`;
-  let tab="exported", lastRows=[],
-      drill={y:null,m:null,d:null},   // تنقّل مجلدات «المصدَّرة»
-      recentDay=null;                 // اليوم المفتوح في «المصدَّرة حديثاً»
+  const BIDS=["bdf","bdt","btc","bitem"];
+  const saveBF = bindFilters(BIDS, bst.f);
+  let tab=bst.tab, lastRows=[],
+      drill=bst.drill,                // تنقّل مجلدات «المصدَّرة»
+      recentDay=bst.recentDay;        // اليوم المفتوح في «المصدَّرة حديثاً»
 
   // «المصدَّرة حديثاً»: مجلد لكل يوم تصدير خلال آخر ٧ أيام — دخول مباشر بلا سنة/شهر
   const renderRecent=rows=>{
@@ -907,17 +934,19 @@ async function vBroker(){
             <span class="fcount">${g[d].length} شحنة</span></button>`;}).join("")}</div>
         <p class="hint">الشحنات المصدَّرة خلال آخر ٧ أيام — اختر يوماً لعرض كشفه</p>`
         : `<div class="card">${empty("لا توجد شحنات مصدَّرة خلال آخر ٧ أيام")}</div>`;
-      box.querySelectorAll(".folder").forEach(b=>b.onclick=()=>{ recentDay=b.dataset.k; load(); });
+      box.querySelectorAll(".folder").forEach(b=>b.onclick=()=>{
+        recentDay=bst.recentDay=b.dataset.k; load(); });
     }else{
       const [y,m,dd]=recentDay.split("-");
       box.innerHTML=`<div class="crumbs"><button class="crumb" data-lvl="root">📁 الأيام الحديثة</button>
         <span class="sep">‹</span><span class="crumb cur">${dd} ${MONTH_AR[+m-1]} ${y}</span></div>`;
-      box.querySelector('.crumb[data-lvl]').onclick=()=>{ recentDay=null; load(); };
+      box.querySelector('.crumb[data-lvl]').onclick=()=>{ recentDay=bst.recentDay=null; load(); };
       lastRows=g[recentDay]; renderBroker(g[recentDay], load);
     }
   };
 
   const load=async()=>{
+    saveBF();
     const params={date_from:$("#bdf").value,date_to:$("#bdt").value,
                   to_city:$("#btc").value,item:$("#bitem").value};
     if(tab==="exported"||tab==="recent") params.export_status=EXPORTED;
@@ -936,8 +965,9 @@ async function vBroker(){
   };
   $("#bxl").onclick=()=>exportXlsx(BROKER_COLS, lastRows, "customs", "كشف الجمارك");
   $("#bseg").querySelectorAll(".seg-btn").forEach(b=>b.onclick=()=>{
-    tab=b.dataset.tab;
-    drill={y:null,m:null,d:null}; recentDay=null;   // كل تبويب يبدأ من جذر مجلداته
+    tab=bst.tab=b.dataset.tab;
+    drill=bst.drill={y:null,m:null,d:null};         // كل تبويب يبدأ من جذر مجلداته
+    recentDay=bst.recentDay=null;
     $("#bseg").querySelectorAll(".seg-btn").forEach(x=>x.classList.toggle("active",x===b));
     load();
   });
@@ -1180,7 +1210,9 @@ async function vReports(){
    </div>
    <div class="card"><div id="rtbl"></div></div>`;
   $("#rpr").onclick=()=>printDoc("landscape");
-  let lastRows=[], folderMode=false, drill={y:null,m:null,d:null},
+  // الحالة محفوظة بين الزيارات (وضع المجلدات والمستوى المفتوح والفلاتر)
+  const rst = viewState("reports", {folderMode:false, drill:{y:null,m:null,d:null}, f:{}});
+  let lastRows=[], folderMode=rst.folderMode, drill=rst.drill,
       moreOpen=false, preciseOpen=false;
   $("#rmoreBtn").onclick=()=>{
     moreOpen=!moreOpen;
@@ -1285,20 +1317,26 @@ async function vReports(){
 
   const FIDS=["rdf","rdt","rfc","rtc","rsnd","rsfrom","ritem",
               "rfin","rfp","rcs","rds","rcol","ralpha"];
+  const saveRF = bindFilters(FIDS, rst.f);      // استعادة الفلاتر المحفوظة
   // الفلترة فورية — وتبقى داخل المجلد المفتوح بدل القفز لمستوى السنوات
-  liveFilters(FIDS, load);
+  liveFilters(FIDS, ()=>{ saveRF(); load(); });
   $("#rclr").onclick=()=>{
     FIDS.forEach(id=>{ const e=$("#"+id); if(!e) return;
       if(e.type==="checkbox") e.checked=false; else e.value=""; });
-    drill={y:null,m:null,d:null}; load();
+    saveRF();
+    drill=rst.drill={y:null,m:null,d:null}; load();
   };
   $("#rfold").onclick=()=>{
-    folderMode=!folderMode; drill={y:null,m:null,d:null};
+    folderMode=rst.folderMode=!folderMode;
+    drill=rst.drill={y:null,m:null,d:null};
     $("#rfold").textContent = folderMode ? "📋 عرض كجدول" : "📁 عرض بمجلدات الصادرة";
     $("#rfold").classList.toggle("primary", folderMode);
     load();
   };
   $("#exp").onclick=()=>exportXlsx(REPORT_COLS, lastRows, "reports", "تقرير الشحنات");
+  // زر المجلدات يعكس الحالة المستعادة عند العودة للواجهة
+  $("#rfold").textContent = folderMode ? "📋 عرض كجدول" : "📁 عرض بمجلدات الصادرة";
+  $("#rfold").classList.toggle("primary", folderMode);
   load();
 }
 
@@ -1462,16 +1500,20 @@ async function vMahmoud(initialTab){
     <div id="mtab"></div>`;
   const TABS=[["summary","الملخّص"],["parties","الجهات والأرصدة"],["entry","تسجيل عملية"],
               ["revenues","إيرادات الشحنات"],["ledger","سجل العمليات"],["customs","مقارنة الجمارك"]];
-  let cur=TABS.some(([k])=>k===initialTab) ? initialTab : "summary";
-  const period=()=>({date_from:$("#mdf").value, date_to:$("#mdt").value});
+  // فترة البحث والتبويب محفوظان: العودة من كشف حساب أو نموذج عملية لا تمسحهما
+  const mst = viewState("mahmoud", {tab:"summary", f:{}});
+  const saveMF = bindFilters(["mdf","mdt"], mst.f);
+  let cur = TABS.some(([k])=>k===initialTab) ? initialTab : (mst.tab || "summary");
+  mst.tab = cur;
+  const period=()=>{ saveMF(); return {date_from:$("#mdf").value, date_to:$("#mdt").value}; };
   const renderTabs=()=>{
     $("#mtabs").innerHTML=TABS.map(([k,l])=>
       `<button class="tab ${k===cur?'active':''}" data-k="${k}">${l}</button>`).join("");
     $("#mtabs").querySelectorAll("button").forEach(b=>b.onclick=()=>{
-      cur=b.dataset.k; renderTabs(); body();
+      cur=mst.tab=b.dataset.k; renderTabs(); body();
     });
   };
-  const go=tab=>{ cur=tab; renderTabs(); body(); };
+  const go=tab=>{ cur=mst.tab=tab; renderTabs(); body(); };
   const body=async()=>{
     const box=$("#mtab");
     box.innerHTML=`<div class="loading"><div class="spinner"></div></div>`;
@@ -1485,7 +1527,7 @@ async function vMahmoud(initialTab){
     }catch(err){ box.innerHTML=`<div class="card">${empty(err.message)}</div>`; }
   };
   liveFilters(["mdf","mdt"], body);
-  $("#mclr").onclick=()=>{ $("#mdf").value=""; $("#mdt").value=""; body(); };
+  $("#mclr").onclick=()=>{ $("#mdf").value=""; $("#mdt").value=""; saveMF(); body(); };
   renderTabs(); body();
 }
 
