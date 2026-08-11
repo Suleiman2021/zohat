@@ -451,13 +451,14 @@ def _rint(x: float) -> int:
 
 def _computed_exported(db: Session):
     """كل الشحنات الصادرة (لها تاريخ تصدير) مع أرقامها المحسوبة بنسخة معادلاتها."""
-    items = {i.name: (i.syrian_per_ton, i.iraqi_per_ton) for i in db.exec(select(Item)).all()}
+    items = {i.name: (i.syrian_per_ton, i.iraqi_per_ton, bool(i.special_consumption))
+             for i in db.exec(select(Item)).all()}
     resolve = cfg_resolver(db)
     q = select(Shipment).where(Shipment.export_status == EXPORTED,
                                Shipment.export_date != None)          # noqa: E711
     for s in db.exec(q).all():
-        syr, irq = items.get(s.item_name, (0.0, 0.0))
-        c = compute(s, syr, irq, resolve(s.calc_version_id))
+        syr, irq, special = items.get(s.item_name, (0.0, 0.0, False))
+        c = compute(s, syr, irq, resolve(s.calc_version_id), special)
         yield s, c, (s.goods_price or 0.0) + c.get("commission", 0.0)
 
 
@@ -755,7 +756,8 @@ def migrate_legacy(db: Session) -> int:
 
 # ============ مقارنة الجمارك (كما هي — عرض فقط، بلا تعديل) ============
 def _actual_customs(db: Session, date_from, date_to) -> dict:
-    items = {i.name: (i.syrian_per_ton, i.iraqi_per_ton) for i in db.exec(select(Item)).all()}
+    items = {i.name: (i.syrian_per_ton, i.iraqi_per_ton, bool(i.special_consumption))
+             for i in db.exec(select(Item)).all()}
     resolve = cfg_resolver(db)
     q = select(Shipment)
     if date_from: q = q.where(Shipment.ship_date >= date_from)
@@ -763,8 +765,8 @@ def _actual_customs(db: Session, date_from, date_to) -> dict:
     syrian = iraqi = 0.0
     count = 0
     for s in db.exec(q).all():
-        syr, irq = items.get(s.item_name, (0.0, 0.0))
-        c = compute(s, syr, irq, resolve(s.calc_version_id))
+        syr, irq, special = items.get(s.item_name, (0.0, 0.0, False))
+        c = compute(s, syr, irq, resolve(s.calc_version_id), special)
         syrian += c["syrian_actual"]; iraqi += c["iraqi_actual"]; count += 1
     return {"syrian": round(syrian, 2), "iraqi": round(iraqi, 2), "count": count}
 

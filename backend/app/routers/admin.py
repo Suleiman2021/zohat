@@ -1,6 +1,6 @@
 import io
 import urllib.parse
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session, select
 import openpyxl
@@ -65,11 +65,32 @@ def export_xlsx(payload: dict, user: User = Depends(any_role)):
 # ---- الأصناف (قاعدة البيانات) ----
 @router.get("/items")
 def items(db: Session = Depends(get_session), user: User = Depends(any_role),
-          q: str = "", limit: int = 50):
+          q: str = "", limit: int = 50, special: str = ""):
+    """special: "1" = جدول 10% فقط، "0" = الأصناف العادية فقط، فارغ = الكل."""
     query = select(Item)
     if q:
-        query = query.where(Item.name.contains(q))
-    return db.exec(query.limit(min(limit, 2000))).all()
+        query = query.where(Item.name.contains(q) | Item.code.contains(q))
+    if special == "1":
+        query = query.where(Item.special_consumption == True)     # noqa: E712
+    elif special == "0":
+        query = query.where(Item.special_consumption == False)    # noqa: E712
+    return db.exec(query.limit(min(limit, 5000))).all()
+
+
+@router.post("/items/export")
+def export_items(payload: dict, db: Session = Depends(get_session),
+                 user: User = Depends(any_role)):
+    """تصدير جدول الأصناف (العادي أو جدول 10%) إلى ملف Excel."""
+    special = str(payload.get("special") or "")
+    q = (payload.get("q") or "").strip()
+    rows = items(db, user, q=q, limit=5000, special=special)
+    title = "أصناف رسم الإنفاق 10%" if special == "1" else "الأصناف"
+    return export_xlsx({"title": title,
+                        "headers": ["الكود", "الصنف", "الرسم السوري للطن",
+                                    "الرسم العراقي للطن", "جدول 10%"],
+                        "rows": [[i.code, i.name, i.syrian_per_ton, i.iraqi_per_ton,
+                                  "نعم" if i.special_consumption else "لا"] for i in rows]},
+                       user)
 
 
 @router.post("/items")
@@ -95,8 +116,9 @@ def delete_item(iid: int, db: Session = Depends(get_session), user: User = Depen
     return {"ok": True}
 
 
-def _upsert_items(db: Session, rows: list[dict]) -> dict:
-    """تحديث بالاسم إن وُجد، وإلا إضافة صنف جديد. مصدر مشترك لاستيراد CSV و xlsx."""
+def _upsert_items(db: Session, rows: list[dict], special: bool = False) -> dict:
+    """تحديث بالاسم إن وُجد، وإلا إضافة صنف جديد. مصدر مشترك لاستيراد CSV و xlsx.
+    special: الاستيراد إلى «جدول 10%» — يُعلَّم به كل صنف مستورد."""
     existing = {i.name: i for i in db.exec(select(Item)).all()}
     added = updated = 0
     for row in rows:
@@ -110,23 +132,31 @@ def _upsert_items(db: Session, rows: list[dict]) -> dict:
             existing[name].syrian_per_ton = rate
             existing[name].iraqi_per_ton = iraqi
             existing[name].code = code or existing[name].code
+            if special:                     # الاستيراد لجدول 10% يعلّم الصنف
+                existing[name].special_consumption = True
             db.add(existing[name]); updated += 1
         else:
-            it = Item(code=code, name=name, syrian_per_ton=rate, iraqi_per_ton=iraqi)
+            it = Item(code=code, name=name, syrian_per_ton=rate, iraqi_per_ton=iraqi,
+                      special_consumption=special)
             db.add(it); existing[name] = it; added += 1
     db.commit()
     return {"added": added, "updated": updated}
 
 
 @router.post("/items/bulk")
-def bulk_items(rows: list[dict], db: Session = Depends(get_session),
+def bulk_items(payload: dict | list = Body(...), db: Session = Depends(get_session),
                user: User = Depends(admin_only)):
-    """استيراد جماعي من CSV (مُحلَّل في الواجهة) — نفس منطق /items/import-xlsx."""
-    return _upsert_items(db, rows)
+    """استيراد جماعي من CSV (مُحلَّل في الواجهة) — نفس منطق /items/import-xlsx.
+    يقبل قائمة مباشرة (توافقاً) أو {rows, special}."""
+    if isinstance(payload, list):
+        return _upsert_items(db, payload)
+    return _upsert_items(db, payload.get("rows") or [],
+                         special=bool(payload.get("special")))
 
 
 @router.post("/items/import-xlsx")
-async def import_items_xlsx(file: UploadFile = File(...), db: Session = Depends(get_session),
+async def import_items_xlsx(file: UploadFile = File(...), special: str = "",
+                            db: Session = Depends(get_session),
                             user: User = Depends(admin_only)):
     """استيراد مباشر من ملف إكسل «قاعدة البيانات» الأصلي (ورقة تحوي أعمدة الكود/الصنف/الرسم)."""
     content = await file.read()
@@ -171,7 +201,7 @@ async def import_items_xlsx(file: UploadFile = File(...), db: Session = Depends(
                      "name": str(name).strip(),
                      "syrian_per_ton": rate or 0,
                      "iraqi_per_ton": iraqi or 0})
-    return _upsert_items(db, rows)
+    return _upsert_items(db, rows, special=(special == "1"))
 
 
 # ---- المستخدمون (الإدارة فقط) ----

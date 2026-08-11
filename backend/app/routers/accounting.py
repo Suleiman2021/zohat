@@ -12,7 +12,8 @@ router = APIRouter(prefix="/api/accounting", tags=["accounting"])
 
 def _rows(db, date_from, date_to, branch):
     """كل شحنة تُحسب بمعادلات النسخة المثبَّتة عليها وقت تسجيلها."""
-    items = {i.name: (i.syrian_per_ton, i.iraqi_per_ton) for i in db.exec(select(Item)).all()}
+    items = {i.name: (i.syrian_per_ton, i.iraqi_per_ton, bool(i.special_consumption))
+             for i in db.exec(select(Item)).all()}
     resolve = cfg_resolver(db)
     out = []
     q = select(Shipment)
@@ -21,8 +22,8 @@ def _rows(db, date_from, date_to, branch):
     for s in db.exec(q).all():
         if branch and branch not in (s.from_city, s.to_city, s.branch):
             continue
-        syr, irq = items.get(s.item_name, (0.0, 0.0))
-        out.append((s, compute(s, syr, irq, resolve(s.calc_version_id))))
+        syr, irq, special = items.get(s.item_name, (0.0, 0.0, False))
+        out.append((s, compute(s, syr, irq, resolve(s.calc_version_id), special)))
     return out
 
 

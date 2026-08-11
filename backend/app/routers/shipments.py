@@ -35,10 +35,11 @@ EXPORT_FIELDS = {"export_status", "export_date"}
 EXPORTED = "تم التصدير"
 
 
-def _item_rates(db: Session, item_name: str) -> tuple[float, float]:
-    """يعيد (الرسم السوري للطن، الرسم العراقي للطن) للصنف من قاعدة الأصناف."""
+def _item_rates(db: Session, item_name: str) -> tuple[float, float, bool]:
+    """(الرسم السوري للطن، الرسم العراقي للطن، أهو من «جدول 10%»؟) من قاعدة الأصناف."""
     it = db.exec(select(Item).where(Item.name == item_name)).first()
-    return (it.syrian_per_ton, it.iraqi_per_ton) if it else (0.0, 0.0)
+    return ((it.syrian_per_ton, it.iraqi_per_ton, bool(it.special_consumption))
+            if it else (0.0, 0.0, False))
 
 
 def _apply_two_party(patch: dict) -> dict:
@@ -107,8 +108,9 @@ def _enrich(db, sh: Shipment, resolve=None) -> dict:
     """يحسب الشحنة بمعادلات النسخة المثبَّتة عليها وقت تسجيلها (لا بالنسخة الحالية)."""
     resolve = resolve or cfg_resolver(db)
     d = sh.dict()
-    syr, irq = _item_rates(db, sh.item_name)
-    d.update(compute(sh, syr, irq, resolve(sh.calc_version_id)))
+    syr, irq, special = _item_rates(db, sh.item_name)
+    d.update(compute(sh, syr, irq, resolve(sh.calc_version_id), special))
+    d["special_consumption"] = special
     return d
 
 
@@ -329,8 +331,9 @@ def preview_customs(sid: int, patch: dict, db: Session = Depends(get_session),
     allowed = (CUSTOMS_FIELDS - {"customs_computed"}) | {"two_party_auto"}
     patch = {k: v for k, v in patch.items() if k in allowed}
     temp = sh.model_copy(update=patch)
-    syr, irq = _item_rates(db, temp.item_name)
-    return compute(temp, syr, irq, calc_cfg(db))
+    syr, irq, special = _item_rates(db, temp.item_name)
+    return {**compute(temp, syr, irq, calc_cfg(db), special),
+            "special_consumption": special}
 
 
 @router.post("/{sid}/customs")

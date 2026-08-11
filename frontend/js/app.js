@@ -783,7 +783,8 @@ function breakdownCells(c){
     + cell("الرسم العراقي الفعلي F", money(c.iraqi_actual))
     + cell("قيمة البضاعة G", money(c.goods_value ?? 0))
     + cell("السلفة الضريبية H", money(c.tax_advance))
-    + cell("نسبة الإنفاق الاستهلاكي I", (c.consumption_rate*100).toFixed(0)+"%")
+    + cell("نسبة الإنفاق الاستهلاكي I", (c.consumption_rate*100).toFixed(0)+"%"
+        + (c.special_consumption?' <span class="badge info">جدول 10%</span>':''))
     + cell("رسم الإنفاق الاستهلاكي J", money(c.consumption_fee))
     + cell("مصروف طرفين K (للشحنة كاملة)", money(c.two_party_expense))
     + cell("الأجور الإضافية L", money(c.extra_fees));
@@ -2014,21 +2015,43 @@ async function mCustoms(box, reload){
 const escAttr = s => String(s??"").replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;");
 async function vItems(){
   const v=$("#view"); let currentItems=[];
+  // تبويبان يتشاركان نفس الواجهة والأزرار — يفرّقهما وسم «جدول 10%» فقط
+  let tab="0";                       // "0" عادية، "1" جدول رسم الإنفاق 10%
+  const isSp=()=>tab==="1";
+  const SP_TITLE="الأصناف التي عليها نسبة رسم إنفاق استهلاكي بقيمة 10%";
   v.innerHTML=`<h1>الأصناف — قاعدة البيانات</h1>
-   <div class="card"><h3>إضافة صنف</h3><form class="filters" id="nf">
+   <div class="card no-print"><div class="seg" id="iseg">
+     <button class="seg-btn active" data-tab="0">الأصناف</button>
+     <button class="seg-btn" data-tab="1">${SP_TITLE}</button>
+   </div><p class="hint" id="ihint"></p></div>
+   <div class="card"><h3 id="addTitle">إضافة صنف</h3><form class="filters" id="nf">
      <label>الكود<input name="code"></label><label>الصنف<input name="name" required></label>
      <label>الرسم السوري للطن<input type="number" step="0.01" name="syrian_per_ton"></label>
      <label>الرسم العراقي للطن<input type="number" step="0.01" name="iraqi_per_ton"></label>
      <button class="primary">إضافة</button></form></div>
    <div class="card"><h3>استيراد ملف قاعدة البيانات (Excel)</h3>
-     <p class="hint">ارفع ملف .xlsx الأصلي (ورقة «قاعدة البيانات») — يُدرَج الجديد ويُحدَّث الموجود بالاسم. تُقرأ الأعمدة: الكود، الصنف، الرسم السوري للطن، وأي عمود يحوي «عراقي» كرسم عراقي للطن.</p>
+     <p class="hint" id="imphint"></p>
      <input type="file" id="xlsx" accept=".xlsx"><span id="impmsg"></span></div>
-   <div class="card"><label>بحث<input id="q" placeholder="اسم الصنف"></label><div id="il"></div></div>`;
-  const load=async(q="")=>{const its=await API.get("/api/items",{q, limit:2000}); currentItems=its;
-    $("#il").innerHTML=wrapTable(`<table><thead><tr><th>الكود</th><th>الصنف</th><th>الرسم السوري/طن</th><th>الرسم العراقي/طن</th><th>عدد الأصناف: ${its.length}</th></tr></thead>
+   <div class="card"><div class="filters">
+       <label>بحث<input id="q" placeholder="اسم الصنف أو كوده"></label>
+       <button class="sm" id="ixl">⬇ تصدير Excel</button>
+     </div><div id="il"></div></div>`;
+
+  const load=async(q="")=>{
+    const its=await API.get("/api/items",{q, limit:2000, special:tab}); currentItems=its;
+    $("#il").innerHTML=wrapTable(`<table><thead><tr><th>الكود</th><th>الصنف</th><th>الرسم السوري/طن</th><th>الرسم العراقي/طن</th><th>${
+      isSp()?"نقل إلى الأصناف العادية":"نقل إلى جدول 10%"}</th><th>عدد الأصناف: ${its.length}</th></tr></thead>
       <tbody>${its.map(i=>`<tr data-row="${i.id}"><td>${i.code||""}</td><td>${i.name}</td><td>${money(i.syrian_per_ton)}</td><td>${money(i.iraqi_per_ton)}</td>
+        <td><button class="sm" data-move="${i.id}">${isSp()?"↩ إخراج":"⇄ نقل"}</button></td>
         <td><button class="sm" data-edit="${i.id}">تعديل</button>
             <button class="sm danger" data-del="${i.id}">حذف</button></td></tr>`).join("")}</tbody></table>`);
+    // نقل صنف بين الجدولين بضغطة — الوسم وحده يحدّد نسبة الإنفاق
+    $("#il").querySelectorAll("[data-move]").forEach(b=>b.onclick=async()=>{
+      try{
+        await API.put("/api/items/"+b.dataset.move, {special_consumption: !isSp()});
+        toast(isSp()?"أُخرج الصنف من جدول 10%":"نُقل الصنف إلى جدول 10%"); load(q);
+      }catch(err){ toast(err.message, true); }
+    });
     $("#il").querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{
       if(!confirm("حذف هذا الصنف؟")) return;
       try{ await API.del("/api/items/"+b.dataset.del); toast("تم حذف الصنف"); load(q); }
@@ -2043,6 +2066,7 @@ async function vItems(){
         <td><input class="cell-in" data-f="name" value="${escAttr(it.name)}"></td>
         <td><input class="cell-in" data-f="syrian_per_ton" type="number" step="0.01" value="${it.syrian_per_ton}"></td>
         <td><input class="cell-in" data-f="iraqi_per_ton" type="number" step="0.01" value="${it.iraqi_per_ton}"></td>
+        <td></td>
         <td><button class="sm primary" data-save>حفظ</button>
             <button class="sm" data-cancel>إلغاء</button></td>`;
       tr.querySelector("[data-f=name]").focus();
@@ -2058,22 +2082,44 @@ async function vItems(){
       };
     });
   };
+  // الصنف المُضاف من تبويب 10% يُعلَّم به تلقائياً
   $("#nf").addEventListener("submit",async e=>{e.preventDefault();
     const fd=Object.fromEntries(new FormData(e.target));
     fd.syrian_per_ton=Number(fd.syrian_per_ton||0); fd.iraqi_per_ton=Number(fd.iraqi_per_ton||0);
-    try{ await API.post("/api/items",fd); toast("تمت إضافة الصنف"); e.target.reset(); load(); }
+    fd.special_consumption=isSp();
+    try{ await API.post("/api/items",fd); toast("تمت إضافة الصنف"); e.target.reset(); load($("#q").value); }
     catch(err){ toast(err.message, true); }});
   $("#q").addEventListener("input",e=>load(e.target.value));
   $("#xlsx").addEventListener("change",async e=>{
     const file=e.target.files[0]; if(!file) return;
     $("#impmsg").textContent=" جارٍ الاستيراد...";
     try{
-      const res=await API.upload("/api/items/import-xlsx", file);
+      // الاستيراد من تبويب 10% يعلّم كل صنف مستورد بأنه من ذلك الجدول
+      const res=await API.upload("/api/items/import-xlsx?special="+tab, file);
       $("#impmsg").textContent=` تمّت إضافة ${res.added} وتحديث ${res.updated}.`;
-      load();
+      e.target.value=""; load($("#q").value);
     }catch(err){ $("#impmsg").textContent=" "+err.message; }
   });
-  load();
+  $("#ixl").onclick=()=>API.download("/api/items/export",{special:tab, q:$("#q").value},
+    isSp()?"اصناف_رسم_الانفاق_10.xlsx":"الاصناف.xlsx").catch(err=>toast(err.message,true));
+
+  const paintTab=()=>{
+    $("#iseg").querySelectorAll(".seg-btn").forEach(b=>
+      b.classList.toggle("active", b.dataset.tab===tab));
+    $("#addTitle").textContent = isSp()? "إضافة صنف إلى جدول 10%" : "إضافة صنف";
+    $("#ihint").innerHTML = isSp()
+      ? `كل صنف في هذا الجدول تُحتسب له نسبة رسم الإنفاق الاستهلاكي <b>ثابتة</b>
+         من الإعدادات (10% افتراضياً) — <b>بلا شرائح ولا حدّ أدنى للرسم السوري</b>.
+         النسبة قابلة للتعديل من «الطباعة والمعادلات».`
+      : `الأصناف العادية: نسبة رسم الإنفاق تُؤخذ من <b>شرائح الرسم السوري للطن</b>.`;
+    $("#imphint").innerHTML = `ارفع ملف .xlsx (ورقة «قاعدة البيانات») — يُدرَج الجديد ويُحدَّث
+      الموجود بالاسم. تُقرأ الأعمدة: الكود، الصنف، الرسم السوري للطن، وأي عمود يحوي «عراقي».`
+      + (isSp()? ` <b>وكل صنف مستورد من هنا يُضاف إلى جدول 10%.</b>` : "");
+    $("#impmsg").textContent="";
+    load($("#q").value);
+  };
+  $("#iseg").querySelectorAll(".seg-btn").forEach(b=>b.onclick=()=>{ tab=b.dataset.tab; paintTab(); });
+  paintTab();
 }
 
 // ---------- القوائم والإعدادات (إدارة كل القوائم المنسدلة في المشروع) ----------
@@ -2284,7 +2330,16 @@ async function vPrintFx(){
         (0 = تعطيل الحد الأدنى.) التعديل يُحفظ كنسخة جديدة فلا يمسّ الشحنات المسجَّلة سابقاً.</p>
       <h3 class="sub">شرائح رسم الإنفاق الاستهلاكي (على الرسم السوري للطن الأصل)</h3>
       <div id="tiers"></div>
-      <button class="sm" id="addTier">+ شريحة</button></div>
+      <button class="sm" id="addTier">+ شريحة</button>
+      <h3 class="sub">الشريحة الخاصة — أصناف «جدول 10%»</h3>
+      <div class="filters">
+        <label>نسبة رسم الإنفاق لأصناف الجدول (0.10 = 10%)
+          <input id="spRate" type="number" step="0.001" dir="ltr"
+            value="${calc.special_consumption_rate??0.10}"></label>
+      </div>
+      <p class="hint">الأصناف المدرجة في تبويب «الأصناف التي عليها نسبة رسم إنفاق استهلاكي بقيمة 10%»
+        (في صفحة الأصناف) تأخذ هذه النسبة <b>مباشرةً</b> — بلا مرور على الشرائح أعلاه
+        ولا اعتبار للحدّ الأدنى للرسم السوري.</p></div>
 
     <div class="card"><h3>ƒ معادلات الأعمدة المحسوبة</h3>
       <p class="hint">كل معادلة تقابل عموداً في ملف الإكسل الأصلي. عدّلها بحذر — التغيير يسري فوراً على
@@ -2380,6 +2435,7 @@ async function vPrintFx(){
         min_fee:Number($("#minFee").value||0),
         min_fee_max_weight:Number($("#minFeeW").value||0),
         fee_exempt_items:$("#feeExempt").value,
+        special_consumption_rate:Number($("#spRate").value||0),
         tiers:curTiers, formulas, summary_formulas});
       toast(r.changed ? `تم الحفظ كنسخة معادلات جديدة (#${r.version}) — تسري على الشحنات الجديدة فقط`
                       : "لا توجد تغييرات لحفظها");

@@ -168,6 +168,7 @@ def get_calc_settings(db: Session = Depends(get_session), user: User = Depends(a
         "min_fee": cfg.get("min_fee", 0.0),
         "min_fee_max_weight": cfg.get("min_fee_max_weight", 0.0),
         "fee_exempt_items": cfg.get("fee_exempt_items", []),
+        "special_consumption_rate": cfg.get("special_consumption_rate", 0.10),
         "tiers": cfg["tiers"],
         "formulas": [{"key": key, "label": label, "excel": excel, "doc": doc,
                       "default": default, "expr": cfg["formulas"][key]}
@@ -192,7 +193,7 @@ def set_calc_settings(payload: dict, db: Session = Depends(get_session),
 
     # الثوابت
     for field in ("tax_advance_rate", "default_commission", "two_party_per_ton",
-                  "min_fee", "min_fee_max_weight"):
+                  "min_fee", "min_fee_max_weight", "special_consumption_rate"):
         if field in payload:
             try:
                 new_cfg[field] = float(payload[field])

@@ -49,6 +49,7 @@ _MIGRATIONS = {
     ],
     "item": [
         ("iraqi_per_ton", "FLOAT DEFAULT 0"),
+        ("special_consumption", "INTEGER DEFAULT 0"),
     ],
     "mbox": [
         ("allow_credit", "INTEGER DEFAULT 0"),

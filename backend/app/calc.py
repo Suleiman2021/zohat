@@ -193,6 +193,8 @@ def default_calc_cfg() -> dict:
             "two_party_per_ton": 0.0,
             "min_fee": 0.0,                 # الحد الأدنى للمجموع النهائي ($)
             "min_fee_max_weight": 0.0,      # يسري على الشحنات حتى هذا الوزن (كغ)
+            # شريحة خاصة: أصناف «جدول 10%» تأخذ هذه النسبة مباشرةً بلا شرائح
+            "special_consumption_rate": 0.10,
             "fee_exempt_items": [],         # أصناف أجورها صفر دائماً (مثل: أدوية)
             "tiers": [list(t) for t in CONSUMPTION_TIERS],
             "formulas": dict(DEFAULT_FORMULAS),
@@ -215,6 +217,8 @@ def _cfg_from_settings(db) -> dict:
             cfg["min_fee"] = float(rows["calc_min_fee"])
         if rows.get("calc_min_fee_max_weight"):
             cfg["min_fee_max_weight"] = float(rows["calc_min_fee_max_weight"])
+        if rows.get("calc_special_consumption_rate"):
+            cfg["special_consumption_rate"] = float(rows["calc_special_consumption_rate"])
         if rows.get("calc_fee_exempt_items"):
             names = json.loads(rows["calc_fee_exempt_items"])
             if isinstance(names, list):
@@ -240,7 +244,7 @@ def _normalize(payload: dict) -> dict:
     """يكمل أي مفاتيح ناقصة من الافتراضيات (توافق أمامي مع نسخ قديمة)."""
     cfg = default_calc_cfg()
     for k in ("tax_advance_rate", "default_commission", "two_party_per_ton",
-              "min_fee", "min_fee_max_weight"):
+              "min_fee", "min_fee_max_weight", "special_consumption_rate"):
         if isinstance(payload.get(k), (int, float)):
             cfg[k] = float(payload[k])
     if isinstance(payload.get("fee_exempt_items"), list):
@@ -432,9 +436,10 @@ def tier_rate(syrian_per_ton: float, tiers) -> float:
 
 
 def compute(sh, syrian_per_ton: float, iraqi_per_ton: float = 0.0,
-            cfg: dict | None = None) -> dict:
+            cfg: dict | None = None, special_consumption: bool = False) -> dict:
     """يستقبل شحنة + الرسم السوري والعراقي للطن (+ إعدادات المعادلات)، ويعيد كل الأرقام المشتقّة.
-    الرسم العراقي للطن الفعّال = تجاوز الشحنة اليدوي إن وُجد، وإلا رسم الصنف من قاعدة الأصناف."""
+    الرسم العراقي للطن الفعّال = تجاوز الشحنة اليدوي إن وُجد، وإلا رسم الصنف من قاعدة الأصناف.
+    و special_consumption: صنف من «جدول 10%» — تُعتمد نسبته الثابتة بدل الشرائح."""
     cfg = cfg or default_calc_cfg()
     crate = sh.commission_rate if sh.commission_rate is not None else cfg["default_commission"]
     eff_iraqi_per_ton = sh.iraqi_per_ton if sh.iraqi_per_ton is not None else (iraqi_per_ton or 0.0)
@@ -460,7 +465,9 @@ def compute(sh, syrian_per_ton: float, iraqi_per_ton: float = 0.0,
         "is_free": (sh.fees_payment or "") == FREE,
         "tax_advance_rate": cfg["tax_advance_rate"],
         "commission_rate": crate,
-        "consumption_rate": tier_rate(eff_syrian_per_ton, cfg["tiers"]),
+        # أصناف «جدول 10%» تأخذ نسبتها الثابتة مباشرةً — بلا شرائح ولا حدّ أدنى للرسم
+        "consumption_rate": (cfg.get("special_consumption_rate", 0.10) if special_consumption
+                             else tier_rate(eff_syrian_per_ton, cfg["tiers"])),
         "is_company": sh.financing == COMPANY,
         "fees_payment": sh.fees_payment or "",
         "financing": sh.financing or "",

@@ -41,6 +41,9 @@ class Item(SQLModel, table=True):
     name: str = Field(index=True)
     syrian_per_ton: float = 0.0   # الرسم الجمركي السوري للطن (الأصل)
     iraqi_per_ton: float = 0.0    # الرسم الجمركي العراقي للطن
+    # صنف من «جدول 10%»: نسبة رسم الإنفاق الاستهلاكي ثابتة من الإعدادات،
+    # ولا تُؤخذ من شرائح الرسم السوري إطلاقاً
+    special_consumption: bool = False
 
 
 class Shipment(SQLModel, table=True):
