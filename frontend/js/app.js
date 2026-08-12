@@ -850,7 +850,7 @@ function customsForm(sh, done){
   const preview=async()=>{
     const fd=Object.fromEntries(new FormData($("#f")));
     // فارغ = null → يُحسب تلقائياً من ثابت الطن. الأجور الإضافية تُدار من نموذج الشحنة
-    ["two_party_expense","iraqi_per_ton","manual_tax_advance","manual_consumption_fee","commission_rate"].forEach(k=>{
+    ["two_party_expense","manual_tax_advance","manual_consumption_fee","commission_rate"].forEach(k=>{
       fd[k]=(fd[k]===""||fd[k]==null)?null:Number(fd[k]);
     });
     try{
@@ -862,7 +862,7 @@ function customsForm(sh, done){
   $("#f").addEventListener("submit",async e=>{
     e.preventDefault(); const fd=Object.fromEntries(new FormData(e.target));
     // فارغ = null → يُحسب تلقائياً من ثابت الطن. الأجور الإضافية تُدار من نموذج الشحنة
-    ["two_party_expense","iraqi_per_ton","manual_tax_advance","manual_consumption_fee","commission_rate"].forEach(k=>{
+    ["two_party_expense","manual_tax_advance","manual_consumption_fee","commission_rate"].forEach(k=>{
       fd[k]=(fd[k]===""||fd[k]==null)?null:Number(fd[k]);
     });
     try{

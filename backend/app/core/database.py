@@ -100,9 +100,39 @@ def _run_migrations():
                         pass  # نسخة SQLite قديمة لا تدعم DROP COLUMN — تُترك بلا ضرر إن كانت nullable
 
 
+# تجميد رسوم الصنف على الشحنات القائمة — يُنفَّذ مرة واحدة ويُعلَّم في جدول الإعدادات
+_FREEZE_RATES_MARK = "freeze_item_rates_v1"
+
+
+def _freeze_existing_item_rates():
+    """ينسخ رسوم الصنف الحالية إلى كل شحنة قديمة لم تحمل رسمها بعد.
+
+    قبل هذا كانت الشحنة تقرأ رسم صنفها **حياً**، فتعديل رسم صنف يغيّر أرقام
+    شحنات مسجَّلة منذ شهور. بعد النسخ تبقى أرقام كل شحنة كما هي اليوم بالضبط،
+    ولا يمسّها أي تعديل لاحق على الأصناف — يسري على الجديدة وحدها."""
+    insp = inspect(engine)
+    tables = insp.get_table_names()
+    if not {"shipment", "item", "setting"} <= set(tables):
+        return
+    with engine.begin() as conn:
+        done = conn.execute(text("SELECT value FROM setting WHERE key = :k"),
+                            {"k": _FREEZE_RATES_MARK}).first()
+        if done:
+            return
+        for col in ("syrian_per_ton", "iraqi_per_ton"):
+            conn.execute(text(
+                f"UPDATE shipment SET {col} = COALESCE("
+                f"  (SELECT i.{col} FROM item i WHERE i.name = shipment.item_name), 0) "
+                f"WHERE {col} IS NULL"))
+        conn.execute(text("INSERT INTO setting (key, value) VALUES (:k, '1')"),
+                     {"k": _FREEZE_RATES_MARK})
+        print("[ok] جُمِّدت رسوم الأصناف على الشحنات القائمة — تعديل الأصناف لن يمسّها")
+
+
 def init_db():
     SQLModel.metadata.create_all(engine)
     _run_migrations()
+    _freeze_existing_item_rates()
 
 def get_session():
     with Session(engine) as session:

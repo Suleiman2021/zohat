@@ -79,6 +79,19 @@ def _freeze_special(db: Session, sh: Shipment):
     sh.special_consumption = _item_rates(db, sh.item_name)[2]
 
 
+def _freeze_item_rates(db: Session, sh: Shipment):
+    """ينسخ رسوم الصنف (السوري والعراقي للطن) إلى الشحنة إن كانت فارغة.
+
+    بهذا تحمل كل شحنة رسومها الخاصة وقت تسجيلها، فتعديل رسم صنف لاحقاً
+    لا يغيّر أرقام أي شحنة مسجَّلة — يسري على الجديدة فقط. وتجاوز المخلص
+    الكمركي اليدوي يبقى كما هو لأنه يُكتب في نفس الحقلين."""
+    syr, irq, _ = _item_rates(db, sh.item_name)
+    if sh.syrian_per_ton is None:
+        sh.syrian_per_ton = syr
+    if sh.iraqi_per_ton is None:
+        sh.iraqi_per_ton = irq
+
+
 def _visible(user: User, q):
     """عزل البيانات: الفرع يرى ما أرسله (from_city) أو ما يصله (to_city).
     ومسؤول التجميع المرتبط بمدينة يرى شحنات مدينته فقط (جهة الإرسال).
@@ -217,7 +230,8 @@ def create_shipment(sh: Shipment, db: Session = Depends(get_session),
     sh.created_by = user.username
     sh.created_by_name = user.full_name or user.username
     _fill_item_code(db, sh)
-    _freeze_special(db, sh)   # وسم «جدول 10%» يُثبَّت بحالة الصنف الآن
+    _freeze_special(db, sh)     # وسم «جدول 10%» يُثبَّت بحالة الصنف الآن
+    _freeze_item_rates(db, sh)  # ورسوم الصنف تُنسخ عليها فلا يمسّها تعديل لاحق
     _sync_financing(sh)   # التمويل مشتق من ثمن البضاعة
     # تثبيت نسخة المعادلات السارية الآن — أي تعديل لاحق عليها لن يمسّ هذه الشحنة
     resolve = cfg_resolver(db)
@@ -359,6 +373,8 @@ def compute_customs(sid: int, patch: dict, db: Session = Depends(get_session),
         if k in patch:
             setattr(sh, k, patch[k])
     sh.customs_computed = True
+    # ترك حقل الرسم فارغاً يعني «خذ رسم الصنف» — فيُثبَّت عليها الآن ولا يبقى معلّقاً
+    _freeze_item_rates(db, sh)
     db.add(sh); db.commit(); db.refresh(sh)
     return _enrich(db, sh)
 
@@ -405,8 +421,15 @@ def update_shipment(sid: int, patch: dict, db: Session = Depends(get_session),
     if "item_name" in allowed:
         _fill_item_code(db, sh)   # صنف جديد بلا كود → اجلب كوده من قاعدة الأصناف
         _freeze_special(db, sh)   # وتبديل الصنف يعيد تثبيت وسم «جدول 10%» عليه
+        # وتبديل الصنف يجلب رسوم الصنف الجديد (ما لم يكن هناك تجاوز يدوي مُرسَل)
+        if "syrian_per_ton" not in allowed:
+            sh.syrian_per_ton = None
+        if "iraqi_per_ton" not in allowed:
+            sh.iraqi_per_ton = None
     if "goods_price" in allowed:
         _sync_financing(sh)       # التمويل يتبع ثمن البضاعة دائماً
+    # الشحنة تحمل رسومها دائماً — وإفراغ حقل يدوياً يُعيد تثبيت رسم الصنف الحالي
+    _freeze_item_rates(db, sh)
     db.add(sh); db.commit(); db.refresh(sh)
     # تبدّل المسؤولية (ضد الدفع ↔ آجل، لم يُحصَّل ↔ آجل) يصحّح استحقاقات محمود
     changes = _sync_mahmoud(db, sh, before, user)
