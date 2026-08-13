@@ -13,7 +13,10 @@ import webview
 APP_TITLE = "زوهات — نظام الشحن والتخليص"
 
 # رابط النظام — يفتحه البرنامج مباشرةً عند التشغيل.
-DEFAULT_URL = "https://web-production-6fc30.up.railway.app"
+# يُترك فارغاً في المستودع عمداً كي لا يُنشر عنوان نظام إنتاجي.
+# اضبطه قبل البناء بأحد الطرق (بالأولوية): متغيّر البيئة ZOHAT_URL،
+# أو ملف zohat_url.txt بجانب البرنامج، أو عدّل القيمة هنا في نسختك الخاصة.
+DEFAULT_URL = os.getenv("ZOHAT_BUILD_URL", "")
 
 
 def _app_dir() -> Path:
@@ -95,6 +98,32 @@ button:hover{background:#006C84}
 </div></body></html>"""
 
 
+NOT_CONFIGURED_HTML = """<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8">
+<style>
+*{box-sizing:border-box;font-family:'Segoe UI',Tahoma,Arial,sans-serif}
+body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;
+ background:linear-gradient(135deg,#183C60,#006C84)}
+.box{background:#fff;border-radius:18px;padding:34px;width:min(100%,560px);
+ box-shadow:0 18px 50px rgba(0,0,0,.3)}
+h1{color:#183C60;font-size:21px;margin:0 0 10px;text-align:center}
+p{color:#5b7186;font-size:14px;line-height:1.8;margin:0 0 14px}
+code{background:#f1f5f9;padding:2px 7px;border-radius:5px;color:#183C60;
+ font-family:Consolas,monospace;direction:ltr;display:inline-block}
+ol{color:#5b7186;font-size:14px;line-height:2;padding-inline-start:22px;margin:0}
+.ico{font-size:42px;text-align:center;margin-bottom:4px}
+</style></head><body><div class="box">
+<div class="ico">⚙️</div>
+<h1>لم يُضبط رابط الخادم بعد</h1>
+<p>هذه نسخة من المستودع بلا عنوان خادم مدمج (عمداً — كي لا يُنشر عنوان نظام إنتاجي).
+ اضبط الرابط بإحدى الطرق التالية ثم أعد التشغيل:</p>
+<ol>
+<li>متغيّر البيئة <code>ZOHAT_URL</code></li>
+<li>ملف <code>zohat_url.txt</code> بجانب البرنامج يحوي العنوان</li>
+<li>أو <code>ZOHAT_BUILD_URL</code> قبل البناء لتضمينه في الـexe</li>
+</ol>
+</div></body></html>"""
+
+
 class Api:
     def save_file(self, filename, b64):
         """يحفظ ملفاً أرسلته الواجهة (تصدير Excel) عبر نافذة «حفظ باسم» الأصلية.
@@ -132,6 +161,12 @@ class Api:
 
 def main():
     url = load_url()
+    if not url:
+        # لا رابط مضبوط (نسخة من المستودع) — رسالة واضحة بدل صفحة فارغة محيّرة
+        webview.create_window(APP_TITLE, html=NOT_CONFIGURED_HTML,
+                              width=760, height=560, js_api=Api())
+        webview.start()
+        return
     # النافذة تفتح على الرابط مباشرةً — بلا فحص مسبق يؤخّر الإقلاع ولا أي سؤال
     webview.create_window(APP_TITLE, url, width=1280, height=820,
                           min_size=(820, 600), js_api=Api())

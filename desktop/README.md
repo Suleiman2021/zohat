@@ -11,7 +11,7 @@
 ### الطريقة السهلة
 1. (اختياري لكن مُستحسن) افتح [`zohat_desktop.py`](zohat_desktop.py) وضع رابط شركتك في السطر:
    ```python
-   DEFAULT_URL = "https://xxxx.up.railway.app"
+   DEFAULT_URL = ""   # يُضبط عبر ZOHAT_URL أو zohat_url.txt أو ZOHAT_BUILD_URL
    ```
    بهذا يصل البرنامج للموظفين جاهزاً بلا أي إعداد منهم.
 2. انقر نقراً مزدوجاً على **`build.bat`**.

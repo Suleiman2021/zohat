@@ -1,112 +1,151 @@
-# نظام زوهات — الشحن والتخليص الجمركي (ويب + PWA)
+# ZOHAT — Shipping & Customs Clearance System
 
-نقل منطق ملف الإكسل إلى تطبيق ويب حقيقي، بثلاثة أدوار، وباكند FastAPI، وواجهة HTML/CSS/JS vanilla تعمل كـ PWA.
+> 🇸🇦 **العربية:** [README.ar.md](README.ar.md) · 🏛 **Architecture:** [ARCHITECTURE.md](ARCHITECTURE.md)
 
-## البنية
-```
-zohat/
-├─ backend/                FastAPI + SQLModel (منطق الحسابات هنا = مصدر الحقيقة)
-│  ├─ app/
-│  │  ├─ main.py           التطبيق + التهيئة + خدمة الواجهة
-│  │  ├─ models.py         الجداول (مستخدمون، أصناف، شحنات، قيود)
-│  │  ├─ calc.py           محرّك الحسابات (نفس معادلات الإكسل)
-│  │  ├─ core/             الإعدادات + قاعدة البيانات + الأمان (JWT+RBAC)
-│  │  └─ routers/          auth / shipments / accounting / admin / settings
-│  └─ requirements.txt
-└─ frontend/               الواجهة (PWA)
-   ├─ index.html  css/  js/  icons/
-   ├─ manifest.json  sw.js
-```
+A production system that replaced a fragile multi-sheet Excel workbook used to run a
+cross-border shipping and customs-clearance business between Syria and Iraq.
 
-## التشغيل في VS Code
-1. افتح مجلد `zohat` في VS Code. ثبّت إضافة **Python**.
-2. الباكند:
-   ```bash
-   cd backend
-   python -m venv .venv
-   # Windows: .venv\Scripts\activate   |  Linux/Mac: source .venv/bin/activate
-   pip install -r requirements.txt
-   uvicorn app.main:app --reload
-   ```
-3. افتح المتصفح على `http://127.0.0.1:8000` — الواجهة تُخدَم من نفس الخادم.
-4. الدخول الأول: `admin / admin123` (غيّرها فوراً من صفحة المستخدمين).
+It is in daily use by six different roles across multiple branch offices, handling
+customs duty calculation, customer invoicing, inter-office receivables, and a
+double-entry-style ledger — in Arabic, right-to-left, and usable offline.
 
-> الواجهة تُخدَم من FastAPI مباشرة، فلا حاجة لخادم منفصل. للتطوير المنفصل استخدم Live Server وبدّل `API.base` في `frontend/js/api.js` إلى عنوان الباكند.
-
-## الأدوار (RBAC — مفروضة على مستوى الـAPI لا الواجهة فقط)
-- **admin (الإدارة الشاملة):** كل شيء + الأصناف (وإدارتها + استيراد CSV/xlsx) + القوائم والإعدادات + المستخدمون.
-- **accountant (المحاسب):** الشحنات (قراءة/تعديل/حذف) + حساب الجمارك + فاتورة الزبون + لوحة التقارير + الحسابات الكاملة.
-- **branch (فرع):** يُدخل استلام شحنات فرعه فقط ويستطيع تعديلها (لا حذف، ولا حقول جمارك)، ويسلّم/يحصّل الطرود الواصلة لمدينته فقط (عزل بيانات).
-
-## سير العمل (مطابق لترتيب أوراق الإكسل)
-1. **سجل الشحنات (استلام):** الفرع يُدخل بيانات الطرد الأساسية فقط (لا رسوم جمركية بعد). يمكن تعديل أو حذف أي شحنة لاحقاً من نفس الجدول (`PUT`/`DELETE /api/shipments/{id}`) — الحذف يزيل حساب جمركتها معه تلقائياً لأنها كيان واحد (نفس الصف).
-2. **حساب الجمارك:** خطوة منفصلة (admin/accountant) — قائمة "بانتظار الجمركة"، تُدخل فيها الرسم العراقي ومصروف الطرفين والأجور الإضافية وأي تجاوز يدوي (سلفة/رسم إنفاق/نسبة عمولة)، مع **معاينة حية** لكل أعمدة ورقة حساب الجمارك (D..M) عبر `POST /api/shipments/{id}/customs/preview` (لا تُحفظ)، ثم "احتساب وقفل" يحفظ فعلياً (`POST /api/shipments/{id}/customs`) ويمكن إعادة فتحها للتصحيح لاحقاً.
-3. **التسليم والتحصيل:** الفرع المستلِم يحدّث حالة التسليم والتحصيل لشحناته الواردة.
-4. **فاتورة الزبون:** البحث **باسم المستلِم** (وليس المرسِل) — لأنه من يُحصَّل منه المبلغ عند التسليم. تعرض السلفة الضريبية ورسم الإنفاق والأجور الإضافية و«الرسوم» (= الرسم السوري الفعلي + العراقي + مصروف طرفين) كأعمدة منفصلة.
-5. **لوحة التقارير / الحسابات:** عرض وتحليل — لا تُدخل بيانات جديدة هنا.
-
-## القوائم والإعدادات
-صفحة «القوائم والإعدادات» (admin) تدير كل القوائم المنسدلة في المشروع (المدن/الفروع، أنواع الطرود، بنود المصاريف، تمويل البضاعة، طرق الدفع، حالات التسليم/التحصيل) عبر `backend/app/routers/settings.py` — إضافة/تعديل/حذف من الواجهة مباشرة دون لمس الكود. القيم المؤمَّنة 🔒 (مثل "واصل نقداً"/"تم التحصيل") مستخدمة كنصوص ثابتة داخل `calc.py` فلا يمكن حذفها أو تعديلها، لكن يمكن إضافة قيم جديدة بجانبها بحرية.
-
-## منطق الحسابات
-كل الأرقام تُحسب في `backend/app/calc.py` (نفس ملف الإكسل: الرسم السوري الفعلي، الشرائح، السلفة، رسم الإنفاق، العمولة، النقد/الذمم، تنبيهات التناقض «حُصِّل دون تسليم/سُلِّم دون تحصيل»، الصافي التشغيلي والتدفق النقدي). الواجهة **تعرض فقط**.
-
-## استيراد الأصناف
-من صفحة «الأصناف» (admin) يمكن استيراد ملف الإكسل **الأصلي مباشرة** (.xlsx بورقة «قاعدة البيانات») أو ملف CSV برأس `code,name,syrian_per_ton` — كلاهما يُدرج الجديد ويُحدّث الموجود بالاسم. تم استيراد الأصناف الـ387 من `حساب الجمارك والتكلفة النهائية (15).xlsx` فعلياً إلى قاعدة البيانات الحالية.
-
-⚠️ **ملاحظة مهمة:** عمود «الرسم الجمركي للطن» فارغ (صفر) لكل الأصناف الـ387 في ذلك الملف — لم تُملأ الرسوم الفعلية بعد. يجب تعبئتها يدوياً (من صفحة الأصناف، أو بتحديث الملف الأصلي وإعادة الاستيراد) وإلا فسيكون الرسم السوري الفعلي صفراً تلقائياً لكل شحنة حتى تُملأ قيمة صنفها.
-
-## PWA
-`manifest.json` + `sw.js` يتيحان التثبيت كتطبيق والعمل دون إنترنت لملفات الواجهة. طلبات `/api/` تتطلب اتصالاً (بيانات حيّة).
+**Stack:** FastAPI · SQLModel · SQLite/PostgreSQL · vanilla JS PWA (no framework) · pywebview desktop build
 
 ---
 
-# 🚀 النشر على GitHub ثم Railway
+## The problem
 
-## أولاً: رفع المشروع إلى GitHub
-المستودع مُهيّأ محلياً (`git init` + أول commit جاهز). خطواتك:
-1. أنشئ مستودعاً جديداً فارغاً على GitHub (بدون README) — سمّه مثلاً `zohat`.
-2. من مجلد المشروع نفّذ (استبدل الرابط برابط مستودعك):
-   ```bash
-   git remote add origin https://github.com/USERNAME/zohat.git
-   git branch -M main
-   git push -u origin main
-   ```
-   سيطلب منك تسجيل الدخول (استخدم Personal Access Token من GitHub → Settings → Developer settings → Tokens).
+The business ran on one Excel file. It broke the way spreadsheets always break:
 
-## ثانياً: النشر على Railway
-1. ادخل [railway.app](https://railway.app) بحساب GitHub → **New Project → Deploy from GitHub repo** → اختر `zohat`.
-2. **الموقع (Region) الأنسب لسوريا/العراق/كردستان:** من إعدادات الخدمة اختر **`EU West (Amsterdam)`** — أقرب مركز بيانات وأقلّ زمن استجابة للمنطقة. (تجنّب مراكز أمريكا وسنغافورة.)
-3. **قرص دائم للبيانات (مهم جداً):** Railway يمسح الملفات عند كل إعادة نشر. أضِف **Volume**:
-   - Service → **Variables/Settings → Volumes → New Volume**، مسار الربط: `/data`.
-   - ثم أضف المتغيّر: `DATABASE_URL = sqlite:////data/zohat.db` — هكذا تبقى قاعدة البيانات محفوظة بعد كل تحديث.
-   - (بديل: أضِف خدمة **PostgreSQL** من Railway، وهو يضبط `DATABASE_URL` تلقائياً — المشروع يدعم الاثنين.)
-4. **متغيّرات البيئة** (Service → Variables) — انسخها من `.env.example`:
-   | المفتاح | القيمة |
-   |---|---|
-   | `SECRET_KEY` | نص عشوائي طويل (٤٨ حرفاً) |
-   | `DATABASE_URL` | `sqlite:////data/zohat.db` |
-   | `ADMIN_PASSWORD` | كلمة مرور المدير الأولى |
-   | `TELEGRAM_BOT_TOKEN` | توكن بوت تلغرام (للنسخ الاحتياطي) |
-   | `TELEGRAM_CHAT_ID` | معرّف محادثتك في تلغرام |
-5. Railway يبني تلقائياً (Nixpacks + `railway.json`) ويعطيك رابطاً عاماً `https://xxxx.up.railway.app` — الواجهة والـAPI على نفس الرابط. الدخول الأول: `admin` / كلمة مرورك.
+- **No concurrency** — one person edited at a time, and copies diverged.
+- **No access control** — every branch could see and alter every other branch's data.
+- **Silent retroactive damage** — changing a duty rate or a formula rewrote *history*,
+  so last month's invoices no longer matched what the customer had already paid.
+- **No audit trail** — a deleted row was simply gone.
 
-**السرعة:** المشروع يفعّل ضغط GZip للردود، والواجهة PWA تُخزّن ملفاتها محلياً (تحميل فوري بعد أول زيارة)، واختيار Amsterdam يقلّل زمن الطلبات — وهذا أفضل ما يمكن مجاناً للمنطقة.
+The third point is the one that actually costs money, and it drove most of the design below.
 
-# 💾 الأرشفة والحفاظ على البيانات (تلغرام — أفضل طريقة مجانية)
-النظام يرسل تلقائياً **نسخة من قاعدة البيانات + ملف Excel لكل سجلات الشحنات** إلى محادثة تلغرام كل ٢٤ ساعة، بلا أي تكلفة.
+## Engineering decisions worth reading
 
-**الإعداد (٣ دقائق):**
-1. في تلغرام ابحث عن **@BotFather** → `/newbot` → احصل على **TOKEN**.
-2. أرسل أي رسالة لبوتك الجديد، ثم افتح في المتصفح:
-   `https://api.telegram.org/bot<TOKEN>/getUpdates` → انسخ **`chat.id`** (رقم).
-3. ضع `TELEGRAM_BOT_TOKEN` و`TELEGRAM_CHAT_ID` في متغيّرات Railway → أعد النشر.
-4. تحقّق من صفحة **«القوائم والإعدادات»** — ستظهر «✅ تلغرام مُفعَّل». زر **«نسخة احتياطية الآن»** يرسل فوراً، وزر **«تنزيل Excel»** ينزّل السجلات إلى جهازك.
+### 1. Formula versioning — edits never rewrite history
 
-**نسخ أكثر أماناً (اختياري):** للجدولة الخارجية الموثوقة استخدم [cron-job.org](https://cron-job.org) المجاني ليستدعي يومياً:
-`https://موقعك.up.railway.app/api/backup/run?token=<BACKUP_TOKEN>` (بعد ضبط `BACKUP_TOKEN` في Railway).
+Business rules (duty tiers, tax advance, commission, minimum fees) are **user-editable
+formulas**, not hardcoded logic. The obvious implementation recomputes every record from
+the current rules — which silently changes shipments that were invoiced months ago.
 
-## الأمان في الإنتاج
-- اضبط `SECRET_KEY` و`ADMIN_PASSWORD` دائماً، وغيّر كلمة مرور admin من صفحة المستخدمين.
-- حدّد `CORS_ORIGINS` بنطاقك بدل `*` بعد استقرار الموقع.
+Instead, every configuration change is saved as an immutable **version**, and each shipment
+pins the `calc_version_id` it was created under. A shipment is always recomputed with *its
+own* rules.
+
+```python
+# calc.py — each shipment resolves the config it was registered with
+d.update(compute(sh, syr, irq, resolve(sh.calc_version_id), sh.special_consumption))
 ```
+
+The same freezing principle was applied to every input that could drift: per-item duty
+rates and consumption-tier membership are **snapshotted onto the shipment** at
+registration, so editing an item's rate today affects only future shipments.
+
+### 2. A safe evaluator for user-written formulas
+
+Letting users write arithmetic that the server executes is a remote-code-execution hole if
+done naively. Formulas are parsed to an AST and walked against an explicit allowlist —
+no attribute access, no calls except `min/max/round/abs`, no names outside the supplied
+variables.
+
+```python
+_ALLOWED_NODES = (ast.Expression, ast.BinOp, ast.UnaryOp, ast.Constant, ast.Name, ast.Load,
+                  ast.IfExp, ast.Compare, ast.BoolOp, ...)
+```
+
+A malformed or malicious formula falls back to the shipped default rather than crashing
+the calculation for every shipment.
+
+### 3. Authorization enforced at the API, not the UI
+
+Six roles (admin, supervisor, accountant, collector, broker, branch office) each get a
+per-field allowlist plus row-level visibility scoping. Hiding a button is not access
+control — the server re-checks ownership on every mutation.
+
+While building the collector role I found that filtering list endpoints was **not enough**:
+a user could still mutate another city's record by ID. That IDOR is closed explicitly:
+
+```python
+def _assert_collector_city(user, sh):
+    if user.role == ROLE_COLLECTOR and user.branch and sh.from_city != user.branch:
+        raise HTTPException(403, "...")   # عزل لا يكفي إخفاؤه في القوائم
+```
+
+### 4. A ledger where balances are never stored
+
+The accounting module keeps no balance column. Every balance is derived:
+
+```
+balance = Σ charges − (Σ payments + Σ expenses)
+```
+
+Entries are **voided, never deleted**, keeping the audit trail intact, and each void/edit
+is written to a separate audit table. Balances are computed **per currency** (USD/EUR)
+with independent running totals, so a euro payment can never offset a dollar debt.
+
+When a shipment's payment terms change, the ledger charge it produced is reconciled
+automatically — the stale entry is voided with a reason and a corrected one issued,
+rather than being silently overwritten.
+
+### 5. Operational concerns treated as features
+
+- **Backups**: consistent SQLite snapshots via `VACUUM INTO` (not a naive file copy, which
+  can capture a torn database mid-write), pushed to Telegram on a schedule that survives
+  restarts by persisting its last-run slot.
+- **Restore**: upload path gated by header check → `PRAGMA integrity_check` → required-table
+  check → automatic pre-restore safety copy → atomic swap.
+- **Offline**: service worker with network-first for the shell so updates land immediately,
+  cache fallback when the connection drops (relevant for the target region's connectivity).
+
+---
+
+## Features
+
+| Area | What it does |
+|---|---|
+| Shipments | Registration, per-branch isolation, bulk export/revert/delete, folder browsing by year → month → day |
+| Customs | Separate calculation step with live server-side preview; manual overrides for every derived figure |
+| Invoicing | Per-customer invoices, print-optimised layouts, admin-configurable print columns |
+| Reports | Multi-criteria filtering, KPI cards, per-driver weight breakdowns, Excel export |
+| Accounting | Company-wide summary plus an independent manual ledger with multi-currency support |
+| Admin | Editable formulas, dropdown lists, roles/users, print configuration, backup & restore |
+
+## Running it
+
+```bash
+cd backend
+python -m venv .venv && .venv/Scripts/activate   # Linux/macOS: source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload
+```
+
+Open `http://127.0.0.1:8000` — FastAPI serves the frontend, so there is no second server.
+Sign in as `admin` with the password from the `ADMIN_PASSWORD` environment variable.
+
+Deployment notes (Railway, persistent volume, Telegram backups, env vars) are in
+[README.ar.md](README.ar.md).
+
+> **Note:** this repository intentionally ships **no production URL and no credentials**.
+> The desktop client reads its server address from `ZOHAT_URL`, a `zohat_url.txt` file, or
+> a build-time variable.
+
+## Repository layout
+
+```
+backend/app/
+  calc.py       formula engine, safe evaluator, version freezing
+  models.py     SQLModel tables
+  core/         config, database + migrations, JWT auth & RBAC
+  routers/      auth · shipments · accounting · admin · settings · mahmoud · backup
+frontend/       vanilla JS PWA (RTL), service worker, manifest
+desktop/        pywebview + PyInstaller wrapper for Windows
+```
+
+## License
+
+[MIT](LICENSE)
