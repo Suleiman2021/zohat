@@ -206,6 +206,11 @@ TXN_TYPES = (TXN_CHARGE, TXN_PAYMENT, TXN_EXPENSE)
 # أسباب الاستحقاق (مرنة — يمكن للمحاسب كتابة سبب آخر)
 CHARGE_REASONS = ("شحنة", "عمولة", "إيراد", "تسوية", "أخرى")
 
+# العملات — كل عملة محاسبة مستقلة تماماً: أرصدتها ومجاميعها لا تُخلط بغيرها
+CUR_USD = "دولار"
+CUR_EUR = "يورو"
+CURRENCIES = (CUR_USD, CUR_EUR)
+
 
 class MTxn(SQLModel, table=True):
     """قيد في دفتر أستاذ الجهة. المبلغ دائماً موجب، والاتجاه يحدّده النوع.
@@ -215,6 +220,7 @@ class MTxn(SQLModel, table=True):
     txn_date: date = Field(index=True)         # تاريخ العملية (يحدّده المحاسب)
     txn_type: str = TXN_CHARGE
     amount: float = 0.0                        # موجب دائماً
+    currency: str = CUR_USD                    # عملة القيد — لا تُخلط بغيرها أبداً
     reason: str = ""                           # سبب الاستحقاق أو بند المصروف
     description: str = ""
     payment_method: str = ""

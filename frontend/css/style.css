@@ -102,6 +102,9 @@ form.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
 .badge.warn{background:#fff3cd;color:#8a6500}
 /* صف يحتاج انتباهاً: استحقاق مسجَّل يخالف قيمته المحسوبة */
 tr.warn-row td{background:#fffaf0}
+/* كتلة عملة مستقلة — تفصل بصرياً حسابات الدولار عن اليورو */
+.cur-block{border-inline-start:3px solid var(--teal);padding-inline-start:10px;margin-bottom:14px}
+.cur-block .sub{margin:0 0 8px}
 
 button.sm{padding:7px 12px;font-size:12px;border-radius:8px;border:1px solid var(--line);
   background:#fff;font-weight:600}

@@ -56,6 +56,9 @@ _MIGRATIONS = {
     "mbox": [
         ("allow_credit", "INTEGER DEFAULT 0"),
     ],
+    "mtxn": [
+        ("currency", "TEXT DEFAULT 'دولار'"),
+    ],
     "mentry": [
         ("migrated", "INTEGER DEFAULT 0"),
     ],

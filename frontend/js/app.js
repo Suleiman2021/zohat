@@ -329,26 +329,28 @@ async function vShipments(){
        <label>صاحب الشحنة (المستلِم)<input id="snd" placeholder="اسم جزئي"></label>
        <label>المرسِل<input id="sfrom" placeholder="اسم جزئي"></label>
        <label>الصنف<input id="sitem" placeholder="اسم الصنف أو كوده"></label>
+       <label>رقم القيد<input id="sref" placeholder="مثال 1005"></label>
        <button class="sm" id="clr">مسح الفلاتر</button>
        ${API.role!=="accountant"?'<button class="primary gold" id="add">＋ شحنة جديدة</button>':''}
      </div>
+     <div id="skpi"></div>
      <div id="drill"></div>
      <div id="exportbar"></div>
      <div id="tbl"></div>
    </div>`;
-  const SIDS=["df","dt","tc","snd","sfrom","sitem"];
+  const SIDS=["df","dt","tc","snd","sfrom","sitem","sref"];
   const saveFilters = bindFilters(SIDS, st.f);   // استعادة الفلاتر المحفوظة فوراً
   let tab=st.tab;
   let drill=st.drill;                      // تنقّل المصدَّرة: سنة ← شهر ← يوم
 
   const anyFilter=()=>[$("#df").value,$("#dt").value,$("#tc").value,
                        $("#snd").value.trim(),$("#sfrom").value.trim(),
-                       $("#sitem").value.trim()].some(Boolean);
+                       $("#sitem").value.trim(),$("#sref").value.trim()].some(Boolean);
   const load=async(fromSearch)=>{
     saveFilters();
     const params={date_from:$("#df").value,date_to:$("#dt").value,
       to_city:$("#tc").value,receiver:$("#snd").value,sender:$("#sfrom").value,
-      item:$("#sitem").value};
+      item:$("#sitem").value,ref:$("#sref").value};
     if(tab) params.export_status=tab;
     if(isBranch) params.from_city=API.branch;   // صفحة الاستلام تعرض ما أنشأه الفرع فقط
     const rows=await API.get("/api/shipments", params);
@@ -461,11 +463,46 @@ function renderDrill(box, rows, drill, reload, onLeaf, emptyMsg){
 // غلاف خاص بسجل الشحنات: المجلدات ثم جدول الشحنات
 function renderExportedDrill(rows, drill, reload){
   $("#exportbar").innerHTML=""; $("#tbl").innerHTML="";
+  shipKpis(rows, "كل المجلدات المطابقة للفلاتر");
   renderDrill($("#drill"), rows, drill, reload,
     day=>renderShip(day, EXPORTED, reload), "لا توجد شحنات مصدَّرة");
 }
+
+// مؤشرات سجل الشحنات (للمدير العام ومسؤول التجميع): الأعداد والأوزان،
+// مع تفكيك الوزن حسب السائق — تُحسب دائماً على ما هو معروض أمامك
+function shipKpis(rows, scope){
+  const box=$("#skpi"); if(!box) return;
+  if(!["admin","collector"].includes(API.role)){ box.innerHTML=""; return; }
+  if(!rows || !rows.length){ box.innerHTML=""; return; }
+  const kg=n=>(Number(n)||0).toLocaleString("en",{maximumFractionDigits:1})+" كغ";
+  const sum=k=>rows.reduce((a,r)=>a+(Number(r[k])||0),0);
+  const owners=new Set(rows.map(r=>r.receiver_name).filter(Boolean));
+  // تجميع حسب السائق (وغير المحدَّد يُعرض باسم واضح)
+  const byDrv={};
+  rows.forEach(r=>{
+    const d=(r.driver_name||"").trim() || "بلا سائق محدَّد";
+    (byDrv[d]=byDrv[d]||{count:0, weight:0}).count++;
+    byDrv[d].weight += Number(r.weight_kg)||0;
+  });
+  const drv=Object.entries(byDrv).sort((a,b)=>b[1].weight-a[1].weight);
+  const card=(l,v,c="")=>`<div class="kpi ${c}"><div class="label">${l}</div><div class="val">${v}</div></div>`;
+  box.innerHTML=`<div class="card"><h3 class="sub">مؤشرات الشحنات${scope?` — ${scope}`:""}</h3>
+    <div class="kpis">
+      ${card("عدد الشحنات", rows.length)}
+      ${card("عدد الزبائن", owners.size)}
+      ${card("إجمالي الوزن", kg(sum("weight_kg")), "gold")}
+      ${card("إجمالي أجور الشحن والجمركة", money(sum("fees_total")))}
+    </div>
+    ${drv.length?`<h3 class="sub">إجمالي الوزن حسب السائق</h3>
+      ${wrapTable(`<table><thead><tr><th>السائق</th><th>عدد الشحنات</th>
+        <th>إجمالي الوزن</th></tr></thead><tbody>${drv.map(([d,v])=>`<tr>
+        <td><b>${d}</b></td><td>${v.count}</td><td>${kg(v.weight)}</td>
+        </tr>`).join("")}</tbody></table>`)}`:""}
+  </div>`;
+}
 function renderShip(rows, tab, load){
   const bar=$("#exportbar"); bar.innerHTML="";
+  shipKpis(rows, {"قيد التصدير":"قيد التصدير", "تم التصدير":"المصدَّرة"}[tab] || "كل الشحنات");
   if(!rows.length){ $("#tbl").innerHTML=empty("لا توجد شحنات مطابقة"); return; }
   const pending = tab==="قيد التصدير";
   const isAdmin = API.role==="admin";
@@ -1043,6 +1080,7 @@ async function vInvoice(){
       <datalist id="rcusts"></datalist>
       <label>اسم المرسِل<input id="sndr" list="scusts" placeholder="اكتب اسم المرسِل"></label>
       <datalist id="scusts"></datalist>
+      <label>رقم القيد<input id="iref" placeholder="مثال 1005"></label>
       <label>من تاريخ<input type="date" id="if"></label>
       <label>إلى تاريخ<input type="date" id="it"></label>
       <button class="primary" id="go">عرض الفاتورة</button>
@@ -1070,7 +1108,8 @@ async function vInvoice(){
       return;
     }
     const data=await API.get("/api/shipments/invoice",
-      {receiver, sender, date_from:$("#if").value, date_to:$("#it").value});
+      {receiver, sender, ref:$("#iref").value,
+       date_from:$("#if").value, date_to:$("#it").value});
     invRows=data.rows;
     // العنوان يتبع ما بحث به المستخدم؛ وإن بحث بالاثنين يُذكران معاً
     const party = receiver && sender ? `${receiver} / ${sender}` : (receiver || sender);
@@ -1080,7 +1119,7 @@ async function vInvoice(){
   };
   $("#go").onclick=()=>show(false);
   // الاسم يحتاج تطابقاً تاماً فيبقى بزر، أما التاريخان فيُحدّثان الفاتورة المعروضة فوراً
-  liveFilters(["if","it"], ()=>show(true));
+  liveFilters(["if","it","iref"], ()=>show(true));
 }
 function invoiceHtml(party, label, data){
   const rows=data.rows;
@@ -1183,6 +1222,7 @@ async function vReports(){
      <label>صاحب الشحنة (المستلِم)<input id="rsnd" placeholder="اسم جزئي"></label>
      <label>المرسِل<input id="rsfrom" placeholder="اسم جزئي"></label>
      <label>الصنف<input id="ritem" placeholder="اسم الصنف أو كوده"></label>
+     <label>رقم القيد<input id="rref" placeholder="مثال 1005"></label>
      <label>تمويل البضاعة<select id="rfin">${optsWithAll(FINANCE)}</select></label>
      <label>دفع الأجور<select id="rfp">${optsWithAll(PAY)}</select></label>
      <label>حالة الجمركة<select id="rcs">${optsWithAll(CUSTOMS_ST)}</select></label>
@@ -1231,7 +1271,7 @@ async function vReports(){
   const filters=()=>({
     date_from:$("#rdf").value, date_to:$("#rdt").value, from_city:$("#rfc").value,
     to_city:$("#rtc").value, receiver:$("#rsnd").value, sender:$("#rsfrom").value,
-    item:$("#ritem").value,
+    item:$("#ritem").value, ref:$("#rref").value,
     financing:$("#rfin").value, fees_payment:$("#rfp").value,
     customs_status:$("#rcs").value, delivery_status:$("#rds").value,
     collection_status:$("#rcol").value});
@@ -1315,7 +1355,7 @@ async function vReports(){
       "لا توجد شحنات صادرة مطابقة للفلاتر");
   };
 
-  const FIDS=["rdf","rdt","rfc","rtc","rsnd","rsfrom","ritem",
+  const FIDS=["rdf","rdt","rfc","rtc","rsnd","rsfrom","ritem","rref",
               "rfin","rfp","rcs","rds","rcol","ralpha"];
   const saveRF = bindFilters(FIDS, rst.f);      // استعادة الفلاتر المحفوظة
   // الفلترة فورية — وتبقى داخل المجلد المفتوح بدل القفز لمستوى السنوات
@@ -1477,11 +1517,27 @@ const BOX_TYPES=["مكتب","زبون","مخلص سوري","مخلص عراقي"
 const TXN_CHARGE="استحقاق", TXN_PAYMENT="دفعة", TXN_EXPENSE="مصروف";
 const TXN_TYPES=[TXN_CHARGE,TXN_PAYMENT,TXN_EXPENSE];
 const CHARGE_REASONS=["شحنة","عمولة","إيراد","تسوية","أخرى"];
+// العملات: كل واحدة محاسبة مستقلة — لا تُجمع قيمها مع الأخرى في أي مكان
+const CUR_USD="دولار", CUR_EUR="يورو";
+const CURRENCIES=[CUR_USD,CUR_EUR];
+const CUR_SIGN={[CUR_USD]:"$", [CUR_EUR]:"€"};
+// مبلغ بعملته: 1,200.00 $ أو 1,200.00 €
+const cmoney=(v,c)=>(Number(v)||0).toLocaleString("en",{minimumFractionDigits:2})
+  +" "+(CUR_SIGN[c]||c||"$");
 const txnBadge=t=>({[TXN_CHARGE]:'<span class="badge pend">استحقاق ▲</span>',
   [TXN_PAYMENT]:'<span class="badge done">دفعة ▼</span>',
   [TXN_EXPENSE]:'<span class="badge info">مصروف ▼</span>'}[t]||t);
-// رصيد ملوّن: موجب = مستحق علينا تحصيله، سالب = رصيد دائن
-const bal=v=>`<b class="${v>0.01?'neg':(v<-0.01?'pos':'')}">${money(v)}</b>`;
+// رصيد ملوّن: موجب = مستحق علينا تحصيله، سالب = رصيد دائن (للجهة عندنا)
+const bal=(v,c)=>`<b class="${v>0.01?'neg':(v<-0.01?'pos':'')}">${c?cmoney(v,c):money(v)}</b>`;
+// صفوف العملات لجهة/فترة: يعرض العملات ذات الحركة فقط، وإلا شرطة
+const curCell=(rows,key)=>{
+  const on=(rows||[]).filter(r=>Math.abs(r[key])>0.005);
+  return on.length ? on.map(r=>cmoney(r[key], r.currency)).join("<br>") : "—";
+};
+const curBal=rows=>{
+  const on=(rows||[]).filter(r=>Math.abs(r.balance)>0.005);
+  return on.length ? on.map(r=>bal(r.balance, r.currency)).join("<br>") : "—";
+};
 
 // initialTab: تبويب البداية — يُستخدم عند الرجوع من كشف الحساب أو نموذج العملية
 async function vMahmoud(initialTab){
@@ -1534,32 +1590,42 @@ async function vMahmoud(initialTab){
 // ----------------------------- الملخّص -----------------------------
 async function mSummary(box, period, go){
   const s=await API.get("/api/mahmoud/summary", period);
-  const K=[["إجمالي الاستحقاقات",s.charges,""],["إجمالي الدفعات المستلمة",s.payments,"cash"],
-    ["إجمالي المصاريف",s.expenses,"cash"],["صافي المسدَّد (دفعات+مصاريف)",s.settled,""],
-    ["الرصيد المتبقي",s.balance,"gold"]];
-  const kpis=K.map(([l,val,c])=>
-    `<div class="kpi ${c}"><div class="label">${l}</div><div class="val">${money(val)}</div></div>`).join("");
+  // مجموعة بطاقات مستقلة لكل عملة
+  const kpis=(s.by_currency||[]).map(c=>`
+    <div class="cur-block"><h3 class="sub">بال${c.currency}</h3><div class="kpis">
+      <div class="kpi"><div class="label">إجمالي الاستحقاقات</div><div class="val">${cmoney(c.charges,c.currency)}</div></div>
+      <div class="kpi cash"><div class="label">إجمالي الدفعات المستلمة</div><div class="val">${cmoney(c.payments,c.currency)}</div></div>
+      <div class="kpi cash"><div class="label">إجمالي المصاريف</div><div class="val">${cmoney(c.expenses,c.currency)}</div></div>
+      <div class="kpi"><div class="label">صافي المسدَّد</div><div class="val">${cmoney(c.settled,c.currency)}</div></div>
+      <div class="kpi gold"><div class="label">الرصيد المتبقي</div><div class="val">${cmoney(c.balance,c.currency)}</div></div>
+    </div></div>`).join("");
   const types=s.by_type.length ? wrapTable(`<table><thead><tr>
-      <th>النوع</th><th>استحقاقات</th><th>دفعات</th><th>مصاريف</th><th>المتبقي</th>
+      <th>النوع</th><th>العملة</th><th>استحقاقات</th><th>دفعات</th><th>مصاريف</th><th>المتبقي</th>
     </tr></thead><tbody>${s.by_type.map(t=>`<tr><td><b>${t.type}</b></td>
-      <td>${money(t.charges)}</td><td>${money(t.payments)}</td><td>${money(t.expenses)}</td>
-      <td>${bal(t.balance)}</td></tr>`).join("")}</tbody></table>`) : empty("لا توجد بيانات");
+      <td class="nowrap">${t.currency}</td>
+      <td>${cmoney(t.charges,t.currency)}</td><td>${cmoney(t.payments,t.currency)}</td>
+      <td>${cmoney(t.expenses,t.currency)}</td>
+      <td>${bal(t.balance,t.currency)}</td></tr>`).join("")}</tbody></table>`) : empty("لا توجد بيانات");
   const reasons=s.by_reason.length ? wrapTable(`<table><thead><tr>
-      <th>السبب / البند</th><th>عدد</th><th>استحقاقات</th><th>دفعات</th><th>مصاريف</th>
-    </tr></thead><tbody>${s.by_reason.map(r=>`<tr><td>${r.reason}</td><td>${r.count}</td>
-      <td>${money(r.charges)}</td><td>${money(r.payments)}</td><td>${money(r.expenses)}</td>
+      <th>السبب / البند</th><th>العملة</th><th>عدد</th><th>استحقاقات</th><th>دفعات</th><th>مصاريف</th>
+    </tr></thead><tbody>${s.by_reason.map(r=>`<tr><td>${r.reason}</td>
+      <td class="nowrap">${r.currency}</td><td>${r.count}</td>
+      <td>${cmoney(r.charges,r.currency)}</td><td>${cmoney(r.payments,r.currency)}</td>
+      <td>${cmoney(r.expenses,r.currency)}</td>
       </tr>`).join("")}</tbody></table>`) : empty("لا توجد حركات ضمن الفترة");
   const dues=s.outstanding.filter(o=>o.balance>0.01);
   const creds=s.outstanding.filter(o=>o.balance<-0.01);
   const list=(arr,cls)=>arr.length?wrapTable(`<table><thead><tr><th>الجهة</th><th>النوع</th>
-      <th>الرصيد</th><th></th></tr></thead><tbody>${arr.map(o=>`<tr>
-      <td><b>${o.name}</b></td><td>${o.type}</td><td class="${cls}"><b>${money(Math.abs(o.balance))}</b></td>
+      <th>العملة</th><th>الرصيد</th><th></th></tr></thead><tbody>${arr.map(o=>`<tr>
+      <td><b>${o.name}</b></td><td>${o.type}</td><td class="nowrap">${o.currency}</td>
+      <td class="${cls}"><b>${cmoney(Math.abs(o.balance),o.currency)}</b></td>
       <td><button class="sm" data-open="${o.id}">كشف الحساب</button></td></tr>`).join("")}
       </tbody></table>`):empty("لا يوجد");
-  box.innerHTML=`<div class="card"><div class="kpis">${kpis}</div>
-      <p class="hint">${s.parties_count} جهة · ${s.txn_count} عملية ضمن الفترة ·
-        إجمالي المستحق للتحصيل <b class="neg">${money(s.outstanding_total)}</b>
-        ${s.credit_total?` · رصيد دائن <b class="pos">${money(s.credit_total)}</b>`:""}</p></div>
+  const totLine=(s.totals_by_currency||[]).map(c=>
+    `${c.currency}: مستحق <b class="neg">${cmoney(c.outstanding,c.currency)}</b>`
+    +(c.credit?` · دائن <b class="pos">${cmoney(c.credit,c.currency)}</b>`:"")).join(" &nbsp;|&nbsp; ");
+  box.innerHTML=`<div class="card">${kpis}
+      <p class="hint">${s.parties_count} جهة · ${s.txn_count} عملية ضمن الفترة<br>${totLine}</p></div>
     <div class="card"><h3>💰 جهات عليها مستحقات (بحاجة تحصيل)</h3>${list(dues,"neg")}</div>
     ${creds.length?`<div class="card"><h3>↩ جهات لها رصيد دائن</h3>${list(creds,"pos")}</div>`:""}
     <div class="card"><h3>حسب نوع الجهة</h3>${types}</div>
@@ -1591,11 +1657,12 @@ async function mParties(box, period, reload, go){
         <th>الجهة</th><th>المطلوب</th><th>المدفوع</th><th>المصاريف</th><th>المتبقي</th>
         <th>آخر دفعة</th><th>تاريخها</th><th>عدد الدفعات</th><th>الحالة</th><th>إجراءات</th>
       </tr></thead><tbody>${list.map(p=>`<tr data-row="${p.id}">
-        <td><b>${p.name}</b>${p.notes?`<div class="mini">${p.notes}</div>`:''}
-          ${p.allow_credit?'<div class="mini">يسمح برصيد دائن</div>':''}</td>
-        <td>${money(p.charges)}</td><td>${money(p.payments)}</td><td>${money(p.expenses)}</td>
-        <td>${bal(p.balance)}</td>
-        <td>${p.last_payment?money(p.last_payment):"-"}</td>
+        <td><b>${p.name}</b>${p.notes?`<div class="mini">${p.notes}</div>`:''}</td>
+        <td>${curCell(p.by_currency,"charges")}</td>
+        <td>${curCell(p.by_currency,"payments")}</td>
+        <td>${curCell(p.by_currency,"expenses")}</td>
+        <td>${curBal(p.by_currency)}</td>
+        <td>${p.last_payment?cmoney(p.last_payment,p.last_payment_currency):"-"}</td>
         <td class="nowrap">${p.last_payment_date||"-"}</td>
         <td>${p.payments_count}</td>
         <td>${p.is_settled?'<span class="badge done">مسدَّد</span>'
@@ -1625,10 +1692,7 @@ async function mParties(box, period, reload, go){
     const tr=$("#pl").querySelector(`tr[data-row="${p.id}"]`);
     tr.innerHTML=`<td><input class="cell-in" data-f="name" value="${escAttr(p.name)}"></td>
       <td colspan="3"><select class="cell-in" data-f="box_type">${opts(BOX_TYPES,p.box_type)}</select></td>
-      <td colspan="3"><input class="cell-in" data-f="notes" value="${escAttr(p.notes)}" placeholder="ملاحظات"></td>
-      <td><select class="cell-in" data-f="allow_credit">
-        <option value="0" ${!p.allow_credit?'selected':''}>لا رصيد دائن</option>
-        <option value="1" ${p.allow_credit?'selected':''}>يسمح بدائن</option></select></td>
+      <td colspan="4"><input class="cell-in" data-f="notes" value="${escAttr(p.notes)}" placeholder="ملاحظات"></td>
       <td><select class="cell-in" data-f="is_active">
         <option value="1" ${p.is_active?'selected':''}>نشطة</option>
         <option value="0" ${!p.is_active?'selected':''}>موقوفة</option></select></td>
@@ -1639,7 +1703,6 @@ async function mParties(box, period, reload, go){
       const patch={};
       tr.querySelectorAll(".cell-in").forEach(i=>patch[i.dataset.f]=i.value);
       patch.is_active = patch.is_active==="1";
-      patch.allow_credit = patch.allow_credit==="1";
       try{ await API.put("/api/mahmoud/parties/"+p.id, patch); toast("تم التعديل"); reload(); }
       catch(err){ toast(err.message, true); }
     };
@@ -1652,8 +1715,22 @@ async function mStatement(pid, fromTab){
   v.innerHTML=`<div class="loading"><div class="spinner"></div></div>`;
   const d=await API.get(`/api/mahmoud/parties/${pid}/statement`);
   const p=d.party, t=d.totals;
-  const K=[["إجمالي المطلوب",t.charges,""],["إجمالي المدفوع",t.payments,"cash"],
-    ["إجمالي المصاريف",t.expenses,"cash"],["الرصيد المتبقي",t.balance,"gold"]];
+  // بطاقات مستقلة لكل عملة — لا يُجمع دولار مع يورو أبداً
+  const curCards=(d.by_currency||[]).map(c=>`
+    <div class="cur-block">
+      <h3 class="sub">بال${c.currency}</h3>
+      <div class="kpis">
+        <div class="kpi"><div class="label">إجمالي المطلوب</div><div class="val">${cmoney(c.charges,c.currency)}</div></div>
+        <div class="kpi cash"><div class="label">إجمالي المدفوع</div><div class="val">${cmoney(c.payments,c.currency)}</div></div>
+        <div class="kpi cash"><div class="label">إجمالي المصاريف</div><div class="val">${cmoney(c.expenses,c.currency)}</div></div>
+        <div class="kpi gold"><div class="label">الرصيد المتبقي</div><div class="val">${cmoney(c.balance,c.currency)}</div></div>
+        <div class="kpi"><div class="label">عدد الدفعات</div><div class="val">${c.payments_count}</div></div>
+      </div>
+      <p class="hint">الرصيد = ${cmoney(c.charges,c.currency)} −
+        [${cmoney(c.payments,c.currency)} + ${cmoney(c.expenses,c.currency)}] =
+        <b>${cmoney(c.balance,c.currency)}</b>${c.balance<-0.01
+          ? ' — <span class="badge info">رصيد دائن للجهة</span>' : ""}</p>
+    </div>`).join("");
   v.innerHTML=`<h1>كشف حساب: ${p.name}</h1>
     <div class="card no-print"><div class="btn-row">
       <button class="sm" id="back">← رجوع</button>
@@ -1663,15 +1740,10 @@ async function mStatement(pid, fromTab){
     </div></div>
     <div class="only-print">${brandHead()}</div>
     <div class="card"><h3>${p.name} <span class="count-badge">${p.box_type}</span></h3>
-      <div class="kpis">${K.map(([l,val,c])=>
-        `<div class="kpi ${c}"><div class="label">${l}</div><div class="val">${money(val)}</div></div>`).join("")}
-        <div class="kpi"><div class="label">عدد الدفعات</div><div class="val">${t.payments_count}</div></div>
-        <div class="kpi"><div class="label">آخر دفعة</div><div class="val">${t.last_payment?money(t.last_payment):"—"}</div>
-          ${t.last_payment_date?`<div class="mini">${t.last_payment_date}</div>`:""}</div>
-      </div>
-      <p class="hint">الرصيد = الاستحقاقات (${money(t.charges)}) −
-        [الدفعات (${money(t.payments)}) + المصاريف (${money(t.expenses)})] =
-        <b>${money(t.balance)}</b></p></div>
+      ${curCards}
+      <p class="hint">آخر دفعة: ${t.last_payment
+        ? cmoney(t.last_payment, t.last_payment_currency)+(t.last_payment_date?` — ${t.last_payment_date}`:"")
+        : "—"}</p></div>
     ${["مكتب","زبون"].includes(p.box_type)?`<div class="card no-print">
       <h3>⚡ الاستحقاقات التلقائية من الشحنات الصادرة</h3>
       <div id="ac"><div class="loading"><div class="spinner"></div></div></div></div>`:""}
@@ -1684,6 +1756,7 @@ async function mStatement(pid, fromTab){
       ["txn_date","التاريخ",r=>r.txn_date],["created_at_time","الوقت",r=>r.created_at_time],
       ["id","رقم العملية",r=>r.id],["txn_type","نوع الحركة",r=>r.txn_type],
       ["reason","السبب/البند",r=>r.reason||"-"],["description","التفاصيل",r=>r.description||"-"],
+      ["currency","العملة",r=>r.currency||CUR_USD],
       ["amount","القيمة",r=>r.amount],
       ["balance_before","الرصيد قبل",r=>r.balance_before??""],
       ["balance_after","الرصيد بعد",r=>r.balance_after??""],
@@ -1692,15 +1765,16 @@ async function mStatement(pid, fromTab){
 
   $("#lg").innerHTML = d.ledger.length ? wrapTable(`<table><thead><tr>
       <th>التاريخ</th><th>الوقت</th><th>رقم</th><th>نوع الحركة</th><th>السبب/البند</th>
-      <th>التفاصيل</th><th>القيمة</th><th>الرصيد قبل</th><th>الرصيد بعد</th>
+      <th>التفاصيل</th><th>العملة</th><th>القيمة</th><th>الرصيد قبل</th><th>الرصيد بعد</th>
       <th>المستخدم</th><th>ملاحظات</th><th class="no-print"></th>
     </tr></thead><tbody>${d.ledger.map(r=>`<tr class="${r.is_void?'void-row':''}">
       <td class="nowrap">${r.txn_date}</td><td class="mini">${r.created_at_time}</td>
       <td>${r.id}</td><td class="nowrap">${txnBadge(r.txn_type)}</td>
       <td>${r.reason||"-"}</td><td>${r.description||"-"}</td>
-      <td><b>${r.signed_amount>0?"+":""}${money(r.signed_amount)}</b></td>
-      <td>${r.is_void?"—":money(r.balance_before)}</td>
-      <td>${r.is_void?"—":`<b>${money(r.balance_after)}</b>`}</td>
+      <td class="nowrap"><b>${r.currency||CUR_USD}</b></td>
+      <td><b>${r.signed_amount>0?"+":""}${cmoney(r.signed_amount, r.currency)}</b></td>
+      <td>${r.is_void?"—":cmoney(r.balance_before, r.currency)}</td>
+      <td>${r.is_void?"—":`<b>${cmoney(r.balance_after, r.currency)}</b>`}</td>
       <td class="mini">${r.created_by||"-"}</td>
       <td>${r.notes||"-"}${r.is_void?`<div class="mini">ملغاة: ${r.void_reason||"—"} (${r.voided_by||""})</div>`:""}
         ${r.edited_count?`<div class="mini">عُدِّلت ${r.edited_count} مرة</div>`:""}</td>
@@ -1851,13 +1925,16 @@ async function mTxnDialog(pid, pname, done, existing){
     <div class="card"><form class="grid" id="tf" novalidate>
       ${pid?`<label>الجهة<input value="${escAttr(pname)}" readonly class="derived"></label>`
            :`<label>الجهة<select name="party_id" id="pp">${
-              parties.map(p=>`<option value="${p.id}">${p.name} — ${p.box_type} (متبقٍ ${money(p.balance)})</option>`).join("")
+              parties.map(p=>`<option value="${p.id}">${p.name} — ${p.box_type}</option>`).join("")
              }</select></label>`}
       <label>نوع العملية<select name="txn_type" id="tt" ${isEdit?'disabled':''}>
         ${opts(TXN_TYPES, existing?existing.txn_type:TXN_CHARGE)}</select></label>
       <label>التاريخ<input type="date" name="txn_date" id="td"
         value="${existing?existing.txn_date:today()}"></label>
-      <label>المبلغ ($) <span class="req">*</span><input type="number" step="0.01" name="amount" id="am"
+      <label>العملة<select name="currency" id="cu">
+        ${opts(CURRENCIES, existing?(existing.currency||CUR_USD):CUR_USD)}</select>
+        <small class="hint">كل عملة حساب مستقل — لا تُجمع مع الأخرى</small></label>
+      <label>المبلغ <span class="req">*</span><input type="number" step="0.01" name="amount" id="am"
         value="${existing?existing.amount:""}" autofocus></label>
       <label id="reasonWrap">السبب / البند <span class="opt">(اختياري)</span>
         <input name="reason" list="mreasons" value="${existing?escAttr(existing.reason):""}"
@@ -1906,7 +1983,7 @@ async function mTxnDialog(pid, pname, done, existing){
         fd.party_id = pid || Number(fd.party_id);
         fd.txn_type = $("#tt").value;
         const r=await API.post("/api/mahmoud/txn", fd);
-        toast(`تم التسجيل — الرصيد الجديد ${money(r.party_balance)}`);
+        toast(`تم التسجيل — رصيد ${fd.currency}: ${cmoney(r.party_balance, fd.currency)}`);
       }
       done();                                 // العودة للواجهة السابقة
     }catch(err){ toast(err.message, true); btn.disabled=false; }
@@ -1922,7 +1999,7 @@ async function mEntryForm(box, reload, go){
       <div id="quick"></div></div>`;
   $("#quick").innerHTML=wrapTable(`<table><thead><tr><th>الجهة</th><th>النوع</th>
       <th>المتبقي</th><th>إجراءات</th></tr></thead><tbody>${parties.map(p=>`<tr>
-      <td><b>${p.name}</b></td><td>${p.box_type}</td><td>${bal(p.balance)}</td>
+      <td><b>${p.name}</b></td><td>${p.box_type}</td><td>${curBal(p.by_currency)}</td>
       <td class="nowrap"><button class="sm primary" data-new="${p.id}" data-n="${escAttr(p.name)}">＋ عملية</button>
         <button class="sm" data-stmt="${p.id}">كشف الحساب</button></td></tr>`).join("")}
     </tbody></table>`);
@@ -1940,6 +2017,7 @@ async function mLedger(box, period, reload){
         <label>الجهة<select id="lp"><option value="">الكل</option>${
           parties.map(p=>`<option value="${p.id}">${p.name} — ${p.box_type}</option>`).join("")}</select></label>
         <label>نوع الحركة<select id="lt">${optsWithAll(TXN_TYPES)}</select></label>
+        <label>العملة<select id="lc">${optsWithAll(CURRENCIES)}</select></label>
         <label>المستخدم<input id="lu" placeholder="اسم المستخدم"></label>
         <label>بحث<input id="lq" placeholder="سبب/تفاصيل/مرجع"></label>
         <label class="chk-inline"><input type="checkbox" id="lv" checked> إظهار الملغاة</label>
@@ -1951,40 +2029,43 @@ async function mLedger(box, period, reload){
   let shown=[];
   const load=async()=>{
     const d=await API.get("/api/mahmoud/ledger",{...period,
-      party_id:$("#lp").value, txn_type:$("#lt").value,
+      party_id:$("#lp").value, txn_type:$("#lt").value, currency:$("#lc").value,
       by_user:$("#lu").value, q:$("#lq").value,
       include_void:$("#lv").checked?"true":"false"});
     shown=d.rows;
     const t=d.totals;
-    $("#lout").innerHTML=`<div class="kpis" style="margin-bottom:12px">
-        <div class="kpi"><div class="label">استحقاقات</div><div class="val">${money(t.charges)}</div></div>
-        <div class="kpi cash"><div class="label">دفعات</div><div class="val">${money(t.payments)}</div></div>
-        <div class="kpi cash"><div class="label">مصاريف</div><div class="val">${money(t.expenses)}</div></div>
-        <div class="kpi gold"><div class="label">صافي الرصيد</div><div class="val">${money(t.balance)}</div></div>
-        <div class="kpi"><div class="label">عدد العمليات</div><div class="val">${d.count}</div></div>
-      </div>
+    $("#lout").innerHTML=`${(d.by_currency||[]).map(c=>`
+        <div class="cur-block"><h3 class="sub">بال${c.currency}</h3><div class="kpis">
+          <div class="kpi"><div class="label">استحقاقات</div><div class="val">${cmoney(c.charges,c.currency)}</div></div>
+          <div class="kpi cash"><div class="label">دفعات</div><div class="val">${cmoney(c.payments,c.currency)}</div></div>
+          <div class="kpi cash"><div class="label">مصاريف</div><div class="val">${cmoney(c.expenses,c.currency)}</div></div>
+          <div class="kpi gold"><div class="label">صافي الرصيد</div><div class="val">${cmoney(c.balance,c.currency)}</div></div>
+        </div></div>`).join("")}
+      <p class="hint">عدد العمليات ضمن الفلتر: <b>${d.count}</b></p>
       ${d.rows.length ? wrapTable(`<table><thead><tr>
         <th>التاريخ</th><th>الوقت</th><th>رقم</th><th>نوع الحركة</th><th>الجهة</th>
-        <th>السبب/البند</th><th>القيمة</th><th>الرصيد قبل</th><th>الرصيد بعد</th>
+        <th>السبب/البند</th><th>العملة</th><th>القيمة</th><th>الرصيد قبل</th><th>الرصيد بعد</th>
         <th>المستخدم</th><th>ملاحظات</th>
       </tr></thead><tbody>${d.rows.map(r=>`<tr class="${r.is_void?'void-row':''}">
         <td class="nowrap">${r.txn_date}</td><td class="mini">${r.created_at_time}</td>
         <td>${r.id}</td><td class="nowrap">${txnBadge(r.txn_type)}</td>
         <td><b>${r.party_name}</b></td><td>${r.reason||"-"}</td>
-        <td><b>${r.signed_amount>0?"+":""}${money(r.signed_amount)}</b></td>
-        <td>${r.is_void?"—":money(r.balance_before)}</td>
-        <td>${r.is_void?"—":money(r.balance_after)}</td>
+        <td class="nowrap"><b>${r.currency||CUR_USD}</b></td>
+        <td><b>${r.signed_amount>0?"+":""}${cmoney(r.signed_amount,r.currency)}</b></td>
+        <td>${r.is_void?"—":cmoney(r.balance_before,r.currency)}</td>
+        <td>${r.is_void?"—":cmoney(r.balance_after,r.currency)}</td>
         <td class="mini">${r.created_by||"-"}</td>
         <td>${r.description||r.notes||"-"}${r.is_void?'<div class="mini">ملغاة</div>':""}</td>
       </tr>`).join("")}</tbody></table>`) : empty("لا توجد عمليات مطابقة")}`;
   };
-  liveFilters(["lp","lt","lu","lq","lv"], load);
+  liveFilters(["lp","lt","lc","lu","lq","lv"], load);
   $("#lpr").onclick=()=>printDoc("landscape");
   $("#lxl").onclick=()=>exportXlsx([
       ["txn_date","التاريخ",r=>r.txn_date],["created_at_time","الوقت",r=>r.created_at_time],
       ["id","رقم العملية",r=>r.id],["txn_type","نوع الحركة",r=>r.txn_type],
       ["party_name","الجهة",r=>r.party_name],["reason","السبب/البند",r=>r.reason||"-"],
-      ["description","التفاصيل",r=>r.description||"-"],["signed_amount","القيمة",r=>r.signed_amount],
+      ["description","التفاصيل",r=>r.description||"-"],
+      ["currency","العملة",r=>r.currency||CUR_USD],["signed_amount","القيمة",r=>r.signed_amount],
       ["balance_before","الرصيد قبل",r=>r.balance_before??""],
       ["balance_after","الرصيد بعد",r=>r.balance_after??""],
       ["created_by","المستخدم",r=>r.created_by||"-"],["notes","ملاحظات",r=>r.notes||"-"],

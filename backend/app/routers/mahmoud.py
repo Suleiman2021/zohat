@@ -24,7 +24,7 @@ from ..models import (User, MBox, MEntry, MTxn, MTxnAudit, MCustomsCheck, MExpor
                       Shipment, Item,
                       BOX_TYPES, BOX_OFFICE, BOX_CUSTOMER,
                       TXN_TYPES, TXN_CHARGE, TXN_PAYMENT, TXN_EXPENSE,
-                      CHARGE_REASONS, _as_date)
+                      CHARGE_REASONS, CURRENCIES, CUR_USD, _as_date)
 from ..calc import compute, cfg_resolver, COD, DEFERRED
 
 EXPORTED = "تم التصدير"
@@ -52,7 +52,15 @@ def _order(rows: list[MTxn]):
     return sorted(rows, key=lambda t: (t.txn_date, t.id or 0))
 
 
-def _totals(rows: list[MTxn]) -> dict:
+def _cur(t: MTxn) -> str:
+    """عملة القيد — القيود القديمة بلا عملة تُعتبر بالدولار."""
+    return (t.currency or CUR_USD).strip() or CUR_USD
+
+
+def _totals(rows: list[MTxn], currency: str | None = None) -> dict:
+    """مجاميع عملة واحدة. currency=None ← كل القيود (للتوافق مع الاستدعاءات القديمة)."""
+    if currency is not None:
+        rows = [t for t in rows if _cur(t) == currency]
     charges = sum(t.amount for t in rows if t.txn_type == TXN_CHARGE)
     payments = sum(t.amount for t in rows if t.txn_type == TXN_PAYMENT)
     expenses = sum(t.amount for t in rows if t.txn_type == TXN_EXPENSE)
@@ -62,9 +70,17 @@ def _totals(rows: list[MTxn]) -> dict:
             "balance": round(charges - payments - expenses, 2)}
 
 
-def _balance(db: Session, party_id: int) -> float:
-    """الرصيد الحالي للجهة (كل الفترات) — يُستخدم للتحقق قبل قبول قيد جديد."""
-    return _totals(_live(db, party_id))["balance"]
+def _by_currency(rows: list[MTxn]) -> list[dict]:
+    """مجاميع كل عملة على حدة — لا تُجمع عملة مع أخرى إطلاقاً.
+    تُعرض كل العملات المعروفة (ولو بصفر) ليبقى ترتيب الأعمدة ثابتاً في الواجهة."""
+    seen = list(CURRENCIES) + [c for c in {_cur(t) for t in rows} if c not in CURRENCIES]
+    return [{"currency": c, **_totals(rows, c)} for c in seen]
+
+
+def _balances(db: Session, party_id: int) -> dict:
+    """رصيد الجهة لكل عملة {العملة: الرصيد} — كل الفترات."""
+    rows = _live(db, party_id)
+    return {c["currency"]: c["balance"] for c in _by_currency(rows)}
 
 
 def _audit(db: Session, txn_id: int, action: str, changes: dict, user: User):
@@ -99,16 +115,20 @@ def list_parties(db: Session = Depends(get_session), user: User = Depends(admin_
     out = []
     for p in parties:
         mine = by_party.get(p.id, [])
-        tot = _totals(mine)
+        tot = _totals(mine)                       # مجموع كل العملات (للفرز والعدّ فقط)
+        cur_rows = _by_currency(mine)             # ولكل عملة أرقامها المستقلة
         pays = _order([t for t in mine if t.txn_type == TXN_PAYMENT])
         last = pays[-1] if pays else None
         out.append({**p.dict(), **tot,
+                    "by_currency": cur_rows,
                     "txn_count": len(mine),
                     "payments_count": len(pays),
                     "last_payment": round(last.amount, 2) if last else 0.0,
+                    "last_payment_currency": _cur(last) if last else CUR_USD,
                     "last_payment_date": str(last.txn_date) if last else "",
-                    "is_settled": abs(tot["balance"]) < 0.01,
-                    "is_credit": tot["balance"] < -0.01})
+                    # التسوية والدائن يُقاسان لكل عملة على حدة
+                    "is_settled": all(abs(c["balance"]) < 0.01 for c in cur_rows),
+                    "is_credit": any(c["balance"] < -0.01 for c in cur_rows)})
     return out
 
 
@@ -178,16 +198,18 @@ def statement(pid: int, db: Session = Depends(get_session), user: User = Depends
     if not p:
         raise HTTPException(404, "الجهة غير موجودة")
 
-    # الرصيد الجاري يُبنى من كل القيود السارية منذ البداية لضمان صحة «الرصيد قبل»
+    # الرصيد الجاري يُبنى من كل القيود السارية منذ البداية لضمان صحة «الرصيد قبل»،
+    # ولكل عملة رصيدها الجاري المستقل فلا تتداخل حركة اليورو مع رصيد الدولار
     all_live = _order(_live(db, pid))
-    running = 0.0
+    running: dict[str, float] = {}
     ledger = []
     for t in all_live:
-        before = running
-        running += SIGN.get(t.txn_type, 0) * t.amount
+        c = _cur(t)
+        before = running.get(c, 0.0)
+        running[c] = before + SIGN.get(t.txn_type, 0) * t.amount
         if date_from and str(t.txn_date) < date_from: continue
         if date_to and str(t.txn_date) > date_to: continue
-        ledger.append(_txn_out(t, p.name, before, running))
+        ledger.append(_txn_out(t, p.name, before, running[c]))
 
     if include_void:   # القيود الملغاة تظهر للمراجعة بلا أثر على الرصيد
         q = select(MTxn).where(MTxn.party_id == pid, MTxn.is_void == True)   # noqa: E712
@@ -205,8 +227,14 @@ def statement(pid: int, db: Session = Depends(get_session), user: User = Depends
         "totals": {**_totals(scoped),
                    "payments_count": len(pays),
                    "last_payment": round(last.amount, 2) if last else 0.0,
+                   "last_payment_currency": _cur(last) if last else CUR_USD,
                    "last_payment_date": str(last.txn_date) if last else ""},
-        "balance_all_time": round(running, 2),
+        # أرقام كل عملة على حدة ضمن الفترة، وأرصدتها الكلية
+        "by_currency": [{**c,
+                         "payments_count": len([t for t in pays if _cur(t) == c["currency"]]),
+                         "balance_all_time": round(running.get(c["currency"], 0.0), 2)}
+                        for c in _by_currency(scoped)],
+        "balance_all_time": round(sum(running.values()), 2),
         "ledger": ledger,
     }
 
@@ -228,18 +256,14 @@ def add_txn(payload: dict, db: Session = Depends(get_session),
         raise HTTPException(400, "المبلغ غير صحيح")
     if amount <= 0:
         raise HTTPException(400, "المبلغ يجب أن يكون أكبر من صفر")
+    currency = (payload.get("currency") or CUR_USD).strip() or CUR_USD
+    if currency not in CURRENCIES:
+        raise HTTPException(400, "عملة غير معروفة")
 
-    # لا يُسمح بتجاوز المستحق إلا إذا كانت الجهة تدعم الرصيد الدائن
-    if ttype in (TXN_PAYMENT, TXN_EXPENSE) and not party.allow_credit:
-        current = _balance(db, party.id)
-        if amount > current + 0.01:
-            raise HTTPException(400,
-                f"المبلغ ({amount:.2f}) يتجاوز الرصيد المستحق ({current:.2f}). "
-                f"فعّل «السماح برصيد دائن» لهذه الجهة إن كان ذلك مقصوداً.")
-
+    # الرصيد الدائن مسموح دائماً: الدفعة قد تتجاوز المستحق فيصبح للجهة رصيد لها
     t = MTxn(party_id=party.id,
              txn_date=_as_date(payload.get("txn_date")) or date.today(),
-             txn_type=ttype, amount=amount,
+             txn_type=ttype, amount=amount, currency=currency,
              reason=(payload.get("reason") or "").strip(),
              description=(payload.get("description") or "").strip(),
              payment_method=(payload.get("payment_method") or "").strip(),
@@ -247,7 +271,8 @@ def add_txn(payload: dict, db: Session = Depends(get_session),
              notes=(payload.get("notes") or "").strip(),
              created_by=user.full_name or user.username)
     db.add(t); db.commit(); db.refresh(t)
-    return {**_txn_out(t, party.name), "party_balance": _balance(db, party.id)}
+    return {**_txn_out(t, party.name), "party_balances": _balances(db, party.id),
+            "party_balance": _balances(db, party.id).get(currency, 0.0)}
 
 
 @router.put("/txn/{tid}")
@@ -260,7 +285,7 @@ def edit_txn(tid: int, patch: dict, db: Session = Depends(get_session),
     if t.is_void:
         raise HTTPException(400, "القيد ملغى — لا يمكن تعديله")
 
-    editable = {"txn_date", "amount", "reason", "description",
+    editable = {"txn_date", "amount", "currency", "reason", "description",
                 "payment_method", "ref_no", "notes"}
     before = {k: getattr(t, k) for k in editable}
     for k, v in patch.items():
@@ -283,7 +308,8 @@ def edit_txn(tid: int, patch: dict, db: Session = Depends(get_session),
     _audit(db, t.id, "تعديل", changed, user)
     db.add(t); db.commit(); db.refresh(t)
     party = db.get(MBox, t.party_id)
-    return {**_txn_out(t, party.name if party else ""), "party_balance": _balance(db, t.party_id)}
+    return {**_txn_out(t, party.name if party else ""), "party_balance": _balances(db, t.party_id).get(_cur(t), 0.0),
+            "party_balances": _balances(db, t.party_id)}
 
 
 @router.post("/txn/{tid}/void")
@@ -302,7 +328,8 @@ def void_txn(tid: int, payload: dict | None = None, db: Session = Depends(get_se
     _audit(db, t.id, "إلغاء", {"سبب الإلغاء": t.void_reason,
                                 "النوع": t.txn_type, "المبلغ": t.amount}, user)
     db.add(t); db.commit(); db.refresh(t)
-    return {**_txn_out(t, ""), "party_balance": _balance(db, t.party_id)}
+    return {**_txn_out(t, ""), "party_balance": _balances(db, t.party_id).get(_cur(t), 0.0),
+            "party_balances": _balances(db, t.party_id)}
 
 
 @router.delete("/txn/{tid}")
@@ -318,7 +345,7 @@ def delete_txn(tid: int, db: Session = Depends(get_session),
             "السبب": t.reason, "التفاصيل": t.description, "الجهة": t.party_id}, user)
     party_id = t.party_id
     db.delete(t); db.commit()
-    return {"ok": True, "party_balance": _balance(db, party_id)}
+    return {"ok": True, "party_balances": _balances(db, party_id)}
 
 
 @router.get("/txn/{tid}/audit")
@@ -343,17 +370,18 @@ def ledger(db: Session = Depends(get_session), user: User = Depends(admin_or_acc
            date_from: Optional[str] = None, date_to: Optional[str] = None,
            party_id: Optional[int] = None, txn_type: Optional[str] = None,
            by_user: Optional[str] = None, q: Optional[str] = None,
-           include_void: bool = True):
+           currency: Optional[str] = None, include_void: bool = True):
     """كشف حساب عام قابل للبحث والتصفية، مع الرصيد قبل/بعد لكل جهة."""
     names = {p.id: p.name for p in db.exec(select(MBox)).all()}
 
-    # الرصيد الجاري يُحسب لكل جهة على حدة من بداية تاريخها
-    running: dict[int, float] = {}
+    # الرصيد الجاري يُحسب لكل جهة **ولكل عملة** على حدة من بداية تاريخها
+    running: dict[tuple, float] = {}
     snapshots: dict[int, tuple] = {}
     for t in _order(_live(db)):
-        before = running.get(t.party_id, 0.0)
+        k = (t.party_id, _cur(t))
+        before = running.get(k, 0.0)
         after = before + SIGN.get(t.txn_type, 0) * t.amount
-        running[t.party_id] = after
+        running[k] = after
         snapshots[t.id] = (before, after)
 
     qy = select(MTxn)
@@ -364,6 +392,8 @@ def ledger(db: Session = Depends(get_session), user: User = Depends(admin_or_acc
     if party_id: qy = qy.where(MTxn.party_id == party_id)
     if txn_type: qy = qy.where(MTxn.txn_type == txn_type)
     rows = db.exec(qy).all()
+    if currency:
+        rows = [t for t in rows if _cur(t) == currency]
     if by_user:
         rows = [t for t in rows if by_user.strip() in (t.created_by or "")]
     if q:
@@ -377,8 +407,9 @@ def ledger(db: Session = Depends(get_session), user: User = Depends(admin_or_acc
         snap = snapshots.get(t.id)
         out.append(_txn_out(t, names.get(t.party_id, "—"),
                             snap[0] if snap else None, snap[1] if snap else None))
-    return {"rows": out, "totals": _totals([t for t in rows if not t.is_void]),
-            "count": len(out)}
+    live_rows = [t for t in rows if not t.is_void]
+    return {"rows": out, "totals": _totals(live_rows),
+            "by_currency": _by_currency(live_rows), "count": len(out)}
 
 
 @router.get("/summary")
@@ -389,22 +420,37 @@ def summary(db: Session = Depends(get_session), user: User = Depends(admin_or_ac
     rows = _live(db, date_from=date_from, date_to=date_to)
     tot = _totals(rows)
 
-    by_type: dict[str, dict] = {}
-    for t in rows:
-        p = parties.get(t.party_id)
-        key = p.box_type if p else "—"
-        d = by_type.setdefault(key, {"type": key, "charges": 0.0, "payments": 0.0, "expenses": 0.0})
-        d[{TXN_CHARGE: "charges", TXN_PAYMENT: "payments", TXN_EXPENSE: "expenses"}[t.txn_type]] += t.amount
+    KIND = {TXN_CHARGE: "charges", TXN_PAYMENT: "payments", TXN_EXPENSE: "expenses"}
 
-    by_reason: dict[str, dict] = {}
-    for t in rows:
-        key = t.reason or "بلا سبب"
-        d = by_reason.setdefault(key, {"reason": key, "charges": 0.0,
-                                       "payments": 0.0, "expenses": 0.0, "count": 0})
-        d[{TXN_CHARGE: "charges", TXN_PAYMENT: "payments", TXN_EXPENSE: "expenses"}[t.txn_type]] += t.amount
-        d["count"] += 1
+    # التجميعات مفتاحها (المجموعة، العملة) فلا تُخلط عملة بأخرى في أي سطر
+    def _group(key_of, label):
+        acc: dict[tuple, dict] = {}
+        for t in rows:
+            k = key_of(t)
+            if k is None:
+                continue
+            c = _cur(t)
+            d = acc.setdefault((k, c), {label: k, "currency": c, "charges": 0.0,
+                                        "payments": 0.0, "expenses": 0.0, "count": 0})
+            d[KIND[t.txn_type]] += t.amount
+            d["count"] += 1
+        out = []
+        for d in acc.values():
+            if not any(abs(d[x]) > 0.001 for x in ("charges", "payments", "expenses")):
+                continue
+            out.append({**d, "charges": round(d["charges"], 2),
+                        "payments": round(d["payments"], 2),
+                        "expenses": round(d["expenses"], 2),
+                        "balance": round(d["charges"] - d["payments"] - d["expenses"], 2)})
+        return out
 
-    # الجهات ذات الرصيد الأعلى (كل الفترات) — لمتابعة التحصيل
+    by_type = sorted(_group(lambda t: (parties[t.party_id].box_type
+                                       if t.party_id in parties else "—"), "type"),
+                     key=lambda x: (x["type"], x["currency"]))
+    by_reason = sorted(_group(lambda t: t.reason or "بلا سبب", "reason"),
+                       key=lambda x: -(x["charges"] + x["payments"] + x["expenses"]))
+
+    # الجهات ذات الرصيد الأعلى (كل الفترات) — سطر لكل جهة وعملة
     all_rows = _live(db)
     per: dict[int, list] = {}
     for t in all_rows:
@@ -412,24 +458,30 @@ def summary(db: Session = Depends(get_session), user: User = Depends(admin_or_ac
     top = []
     for pid, lst in per.items():
         p = parties.get(pid)
-        if not p: continue
-        b = _totals(lst)["balance"]
-        if abs(b) > 0.01:
-            top.append({"id": pid, "name": p.name, "type": p.box_type, "balance": b})
+        if not p:
+            continue
+        for c in _by_currency(lst):
+            if abs(c["balance"]) > 0.01:
+                top.append({"id": pid, "name": p.name, "type": p.box_type,
+                            "currency": c["currency"], "balance": c["balance"]})
     top.sort(key=lambda x: -x["balance"])
 
+    cur_rows = _by_currency(rows)
     return {
         **tot,
+        "by_currency": cur_rows,
         "txn_count": len(rows), "parties_count": len(parties),
-        "by_type": [{**d, "charges": round(d["charges"], 2), "payments": round(d["payments"], 2),
-                     "expenses": round(d["expenses"], 2),
-                     "balance": round(d["charges"] - d["payments"] - d["expenses"], 2)}
-                    for d in sorted(by_type.values(), key=lambda x: x["type"])],
-        "by_reason": [{**d, "charges": round(d["charges"], 2), "payments": round(d["payments"], 2),
-                       "expenses": round(d["expenses"], 2)}
-                      for d in sorted(by_reason.values(),
-                                      key=lambda x: -(x["charges"] + x["payments"] + x["expenses"]))],
+        "by_type": by_type,
+        "by_reason": by_reason,
         "outstanding": top,
+        # الإجماليات لكل عملة على حدة (المستحق للتحصيل والرصيد الدائن)
+        "totals_by_currency": [
+            {"currency": c["currency"],
+             "outstanding": round(sum(x["balance"] for x in top
+                                      if x["currency"] == c["currency"] and x["balance"] > 0), 2),
+             "credit": round(-sum(x["balance"] for x in top
+                                  if x["currency"] == c["currency"] and x["balance"] < 0), 2)}
+            for c in cur_rows],
         "outstanding_total": round(sum(x["balance"] for x in top if x["balance"] > 0), 2),
         "credit_total": round(-sum(x["balance"] for x in top if x["balance"] < 0), 2),
     }
@@ -439,7 +491,7 @@ def summary(db: Session = Depends(get_session), user: User = Depends(admin_or_ac
 def meta(user: User = Depends(admin_or_accountant)):
     """ثوابت النظام للواجهة."""
     return {"txn_types": list(TXN_TYPES), "box_types": list(BOX_TYPES),
-            "charge_reasons": list(CHARGE_REASONS)}
+            "charge_reasons": list(CHARGE_REASONS), "currencies": list(CURRENCIES)}
 
 
 # ========== الاستحقاقات التلقائية من الشحنات الصادرة ==========
@@ -619,7 +671,7 @@ def resync_endpoint(payload: dict, db: Session = Depends(get_session),
     r = resync_auto_charge(db, p, export_date, user, "مزامنة يدوية")
     if not r:
         return {"changed": False, "message": "الاستحقاق مطابق للقيمة المحسوبة — لا تغيير"}
-    return {"changed": True, **r, "party_balance": _balance(db, p.id)}
+    return {"changed": True, **r, "party_balances": _balances(db, p.id)}
 
 
 @router.get("/auto-charges")
@@ -658,7 +710,8 @@ def register_auto_charge(payload: dict, db: Session = Depends(get_session),
              notes="جُلب تلقائياً من النظام الأساسي",
              created_by=user.full_name or user.username)
     db.add(t); db.commit(); db.refresh(t)
-    return {**_txn_out(t, p.name), "party_balance": _balance(db, p.id)}
+    return {**_txn_out(t, p.name), "party_balances": _balances(db, p.id),
+            "party_balance": _balances(db, p.id).get(_cur(t), 0.0)}
 
 
 # ========== إيرادات الشحنات الصادرة (الإجمالي − مصرف حمزة − مصرف ماجد) ==========

@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
+from sqlalchemy import String
 from typing import Optional
 
 from ..core.database import get_session
@@ -140,7 +141,7 @@ def list_shipments(db: Session = Depends(get_session), user: User = Depends(any_
                    date_from: Optional[str] = None, date_to: Optional[str] = None,
                    to_city: Optional[str] = None, from_city: Optional[str] = None,
                    sender: Optional[str] = None, receiver: Optional[str] = None,
-                   item: Optional[str] = None,
+                   item: Optional[str] = None, ref: Optional[str] = None,
                    fees_payment: Optional[str] = None,
                    financing: Optional[str] = None,
                    export_status: Optional[str] = None,
@@ -155,6 +156,9 @@ def list_shipments(db: Session = Depends(get_session), user: User = Depends(any_
     if from_city: q = q.where(Shipment.from_city == from_city)
     if sender: q = q.where(Shipment.sender_name.contains(sender))
     if receiver: q = q.where(Shipment.receiver_name.contains(receiver))
+    # رقم القيد: بحث جزئي (يطابق 1005 و05 معاً)
+    if ref and str(ref).strip():
+        q = q.where(Shipment.ref_no.cast(String).contains(str(ref).strip()))
     # الصنف: بحث جزئي بالاسم أو بالكود الجمركي
     if item:
         q = q.where(Shipment.item_name.contains(item) | Shipment.item_code.contains(item))
@@ -175,6 +179,7 @@ def list_shipments(db: Session = Depends(get_session), user: User = Depends(any_
 @router.get("/invoice")
 def customer_invoice(db: Session = Depends(get_session), user: User = Depends(any_role),
                      receiver: Optional[str] = None, sender: Optional[str] = None,
+                     ref: Optional[str] = None,
                      date_from: Optional[str] = None, date_to: Optional[str] = None):
     """فاتورة الزبون — بالمستلِم أو بالمرسِل (يُحدَّد بحسب ما بحث به المستخدم)."""
     receiver = (receiver or "").strip()
@@ -187,6 +192,8 @@ def customer_invoice(db: Session = Depends(get_session), user: User = Depends(an
     if sender:
         q = q.where(Shipment.sender_name == sender)
     q = _visible(user, q)
+    if ref and str(ref).strip():
+        q = q.where(Shipment.ref_no.cast(String).contains(str(ref).strip()))
     if date_from: q = q.where(Shipment.ship_date >= date_from)
     if date_to: q = q.where(Shipment.ship_date <= date_to)
     resolve = cfg_resolver(db)
