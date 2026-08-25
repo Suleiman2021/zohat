@@ -722,7 +722,7 @@ function shipForm(done, sh, prefill){
           ? `عُدِّلت ${r.updated} شحنة أخرى لـ«${r.receiver}» — ${r.field_label}: ${r.value} (${r.scope})`
           : "لا توجد شحنات أخرى بحاجة تعديل ضمن هذا النطاق";
         if(r.mahmoud_changes && r.mahmoud_changes.length)
-          msg += ` — وصُحِّح ${r.mahmoud_changes.length} استحقاق في حسابات محمود`;
+          msg += ` — ⚠ ${r.mahmoud_changes.length} استحقاق في حسابات محمود صار مرفوضاً وينتظر مزامنتك`;
         toast(msg);
         // نبقى في النموذج كي يمكن تعميم حقول أخرى — الخروج بـ«حفظ التعديلات» وحده
         btn.textContent="✓ عُمِّم";
@@ -746,11 +746,12 @@ function shipForm(done, sh, prefill){
     e.preventDefault();
     try{
       await save();
-      // تبدّل ضد الدفع ↔ آجل يصحّح استحقاقات محمود تلقائياً — نُعلم المستخدم
+      // تبدّل المسؤولية يجعل استحقاقاً مسجَّلاً «مرفوضاً» — لا يُعدَّل تلقائياً،
+      // بل يُنبَّه المستخدم ليعتمد المزامنة بنفسه من كشف الحساب
       const ch=(lastSaved&&lastSaved.mahmoud_changes)||[];
       toast(ch.length
-        ? `تم الحفظ — وصُحِّح ${ch.length} استحقاق في حسابات محمود (${
-            ch.map(c=>`${c.party}: ${money(c.old_amount)}←${money(c.new_amount)}`).join("، ")})`
+        ? `تم الحفظ — ⚠ استحقاق بحاجة مزامنة في حسابات محمود: ${
+            ch.map(c=>`${c.party} (${money(c.booked)} ← ${money(c.computed)})`).join("، ")}`
         : (isEdit?"تم حفظ التعديلات":"تم تسجيل الشحنة"));
       done();
     }catch(err){ toast(err.message, true); }
@@ -1624,7 +1625,20 @@ async function mSummary(box, period, go){
   const totLine=(s.totals_by_currency||[]).map(c=>
     `${c.currency}: مستحق <b class="neg">${cmoney(c.outstanding,c.currency)}</b>`
     +(c.credit?` · دائن <b class="pos">${cmoney(c.credit,c.currency)}</b>`:"")).join(" &nbsp;|&nbsp; ");
-  box.innerHTML=`<div class="card">${kpis}
+  // تنبيه عام: استحقاقات مسجَّلة لم تعد تطابق الشحنات بعد تعديلها
+  const st=await API.get("/api/mahmoud/auto-charges/stale").catch(()=>({rows:[],count:0}));
+  const staleBox = st.count ? `<div class="card warn-card">
+      <h3>⚠ استحقاقات مرفوضة بحاجة مزامنة (${st.count})</h3>
+      <p class="hint">قيود مسجَّلة لم تعد تطابق الشحنات بعد تعديلها.
+        <b>لم يتغيّر شيء تلقائياً</b> — افتح كشف الحساب واضغط «مزامنة» لاعتماد التصحيح.</p>
+      ${wrapTable(`<table><thead><tr><th>الجهة</th><th>النوع</th><th>تاريخ التصدير</th>
+        <th>المسجَّل</th><th>المحسوب الآن</th><th></th></tr></thead><tbody>${
+        st.rows.map(r=>`<tr><td><b>${r.party}</b></td><td>${r.type}</td>
+          <td class="nowrap">${r.export_date}</td>
+          <td class="neg">${money(r.booked)}</td><td>${money(r.computed)}</td>
+          <td><button class="sm primary" data-open="${r.party_id}">كشف الحساب</button></td>
+        </tr>`).join("")}</tbody></table>`)}</div>` : "";
+  box.innerHTML=`${staleBox}<div class="card">${kpis}
       <p class="hint">${s.parties_count} جهة · ${s.txn_count} عملية ضمن الفترة<br>${totLine}</p></div>
     <div class="card"><h3>💰 جهات عليها مستحقات (بحاجة تحصيل)</h3>${list(dues,"neg")}</div>
     ${creds.length?`<div class="card"><h3>↩ جهات لها رصيد دائن</h3>${list(creds,"pos")}</div>`:""}
@@ -1816,31 +1830,38 @@ async function loadAutoCharges(pid, refresh){
   try{
     const d=await API.get("/api/mahmoud/auto-charges",{party_id:pid});
     if(!d.rows.length){
-      box.innerHTML=`<p class="hint">${d.rule}.</p>
+      box.innerHTML=`<p class="hint">${d.rule}</p>
         ${empty("لا توجد استحقاقات محسوبة من الشحنات الصادرة لهذه الجهة")}`;
       return;
     }
-    box.innerHTML=`<p class="hint">${d.rule}. كل استحقاق منسوب لتاريخ شحنته الصادرة،
-        والقيمة تُحسب من النظام الأساسي ولا تُسجَّل مرتين.</p>`
+    // «انتقل إلى»: الجهات التي صارت تتحمّل المبلغ بعد تعديل الشحنة
+    const movedTxt=r=>(r.moved_to&&r.moved_to.length)
+      ? r.moved_to.map(m=>`${m.name} (${m.type}) ${money(m.amount)}`).join("، ") : "";
+    box.innerHTML=`<p class="hint">${d.rule}</p>`
       +wrapTable(`<table><thead><tr>
         <th>تاريخ الشحنة الصادرة</th><th>عدد الشحنات</th><th>أرقام القيود</th>
-        <th>قيمة الاستحقاق</th><th>الحالة</th><th></th></tr></thead>
+        <th>البنود</th><th>قيمة الاستحقاق</th><th>الحالة</th><th></th></tr></thead>
       <tbody>${d.rows.map(r=>`<tr class="${r.stale?'warn-row':''}">
         <td class="nowrap"><b>${r.export_date}</b></td><td>${r.count}</td>
-        <td class="mini">${r.refs}</td>
+        <td class="mini">${r.refs||"—"}</td>
+        <td class="mini">${r.basis||"—"}</td>
         <td><b>${money(r.amount)}</b>${r.stale
-            ? `<div class="mini neg">المسجَّل: ${money(r.booked_amount)}</div>` : ""}</td>
-        <td>${r.stale?'<span class="badge warn">يخالف المحسوب</span>'
+            ? `<div class="mini neg">المسجَّل حالياً: ${money(r.booked_amount)}</div>
+               ${movedTxt(r)?`<div class="mini">انتقل إلى: ${movedTxt(r)}</div>`:""}` : ""}</td>
+        <td>${r.stale?'<span class="badge warn">مرفوض — بحاجة مزامنة</span>'
              :(r.registered?'<span class="badge done">مسجَّل</span>'
                            :'<span class="badge pend">غير مسجَّل</span>')}</td>
         <td class="nowrap">${r.stale
-            ? `<button class="sm primary" data-sync="${r.export_date}">⟳ مزامنة</button>`
+            ? `<button class="sm primary" data-sync="${r.export_date}"
+                 data-old="${r.booked_amount}" data-new="${r.amount}"
+                 data-moved="${escAttr(movedTxt(r))}">⟳ مزامنة</button>`
             : (r.registered?"":`<button class="sm primary" data-reg="${r.export_date}">＋ تسجيل الاستحقاق</button>`)}</td>
       </tr>`).join("")}</tbody></table>`);
     if(d.rows.some(r=>r.stale))
-      box.insertAdjacentHTML("beforeend", `<p class="hint neg">⚠ استحقاق مسجَّل بمبلغ
-        يخالف المحسوب الآن — غالباً بعد تعديل شحنة إلى «واصل نقداً» أو «تم التحصيل».
-        اضغط «مزامنة» لتصحيحه (يُلغى القديم ويُسجَّل بديل بالمبلغ الصحيح).</p>`);
+      box.insertAdjacentHTML("beforeend", `<p class="hint neg">⚠ <b>استحقاق مرفوض:</b>
+        قيد مسجَّل لم يعد يطابق الشحنات بعد تعديلها. <b>لا شيء يتغيّر تلقائياً</b> —
+        اضغط «مزامنة» لتعتمد التصحيح: يُلغى القيد القديم (ويبقى أثره في الكشف)
+        ويُسجَّل البديل بالمبلغ الصحيح، ويُنقل إلى الجهة المسؤولة إن تبدّلت.</p>`);
     box.querySelectorAll("[data-reg]").forEach(b=>b.onclick=async()=>{
       if(!confirm(`تسجيل استحقاق الشحنة الصادرة بتاريخ ${b.dataset.reg}؟`)) return;
       try{
@@ -1849,13 +1870,24 @@ async function loadAutoCharges(pid, refresh){
       }catch(err){ toast(err.message, true); }
     });
     box.querySelectorAll("[data-sync]").forEach(b=>b.onclick=async()=>{
-      if(!confirm(`مزامنة استحقاق ${b.dataset.sync} مع القيمة المحسوبة الآن؟\n\n`+
-        `سيُلغى القيد الحالي (يبقى أثره في الكشف) ويُسجَّل بديل بالمبلغ الصحيح.`)) return;
+      const moved=b.dataset.moved;
+      if(!confirm(`مزامنة استحقاقات ${b.dataset.sync}؟
+
+`+
+        `المسجَّل حالياً: ${money(b.dataset.old)}
+المحسوب الآن: ${money(b.dataset.new)}
+`+
+        (moved?`ينتقل إلى: ${moved}
+`:"")+
+        `
+سيُلغى القيد القديم (يبقى أثره في الكشف) ويُسجَّل البديل بالمبلغ الصحيح.`)) return;
       try{
         const r=await API.post("/api/mahmoud/auto-charges/resync",
           {party_id:pid, export_date:b.dataset.sync});
-        toast(r.changed ? `صُحِّح الاستحقاق: ${money(r.old_amount)} ← ${money(r.new_amount)}`
-                        : r.message);
+        toast(r.changed
+          ? "تمت المزامنة — " + r.changes.map(c=>
+              `${c.party}: ${money(c.old_amount)} ← ${money(c.new_amount)}`).join("، ")
+          : (r.message||"لا تغيير"));
         refresh();
       }catch(err){ toast(err.message, true); }
     });

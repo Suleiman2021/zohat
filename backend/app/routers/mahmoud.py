@@ -25,7 +25,7 @@ from ..models import (User, MBox, MEntry, MTxn, MTxnAudit, MCustomsCheck, MExpor
                       BOX_TYPES, BOX_OFFICE, BOX_CUSTOMER,
                       TXN_TYPES, TXN_CHARGE, TXN_PAYMENT, TXN_EXPENSE,
                       CHARGE_REASONS, CURRENCIES, CUR_USD, _as_date)
-from ..calc import compute, cfg_resolver, COD, DEFERRED
+from ..calc import compute, cfg_resolver, COD, DEFERRED, CASH, COLLECTED
 
 EXPORTED = "تم التصدير"
 NOT_COLLECTED = "لم يُحصَّل"
@@ -514,64 +514,139 @@ def _computed_exported(db: Session):
         yield s, c, (s.goods_price or 0.0) + c.get("commission", 0.0)
 
 
-def _auto_rows(db: Session, p: MBox) -> list[dict]:
-    """استحقاقات الجهة حسب كل شحنة صادرة (مجمّعة بتاريخ التصدير):
-    • مكتب: ضد الدفع للأجور + ثمن البضاعة والعمولة غير المحصَّلة (شحنات وجهتها = اسم المكتب).
-    • زبون: الآجل للأجور + ثمن البضاعة والعمولة الآجلة (شحنات مرسِلها = اسم الزبون)."""
-    name = (p.name or "").strip()
-    by_date: dict[str, dict] = {}
-    for s, c, gwc in _computed_exported(db):
-        if p.box_type == BOX_OFFICE:
-            if (s.to_city or "").strip() != name:
-                continue
-            amt = (c.get("fees_total", 0.0) if s.fees_payment == COD else 0.0) \
-                + (gwc if s.collection_status == NOT_COLLECTED else 0.0)
-        else:   # زبون — الذمم الآجلة على المرسِل
-            if (s.sender_name or "").strip() != name:
-                continue
-            amt = (c.get("fees_total", 0.0) if s.fees_payment == DEFERRED else 0.0) \
-                + (gwc if s.collection_status == DEFERRED else 0.0)
-        # قيمة كل شحنة تُقرَّب لعدد صحيح أولاً ثم تُجمع (نفس منطق تقريب الطباعة)
-        amt = _rint(amt)
-        if amt <= 0:
-            continue
-        d = by_date.setdefault(str(s.export_date),
-                               {"export_date": str(s.export_date), "amount": 0,
-                                "count": 0, "refs": []})
-        d["amount"] += amt
-        d["count"] += 1
-        d["refs"].append(s.ref_no)
+# ===================== مَن يتحمّل استحقاق الشحنة الصادرة؟ =====================
+# مكوّنان مستقلان لكل شحنة، ولكلٍّ قاعدته الخاصة — فقد تكون الأجور «ضد الدفع»
+# على مكتب الوجهة بينما البضاعة «آجلة» على المرسِل في نفس الشحنة.
+#   (نوع الجهة، حقل الشحنة الذي يحمل اسمها، وصف البند)
+_FEES_OWNER = {
+    COD:      (BOX_OFFICE,   "to_city",     "أجور ضد الدفع"),
+    DEFERRED: (BOX_CUSTOMER, "sender_name", "أجور آجلة"),
+    CASH:     (BOX_OFFICE,   "from_city",   "أجور واصلة نقداً"),
+}
+_COLL_OWNER = {
+    NOT_COLLECTED: (BOX_OFFICE,   "to_city",     "بضاعة لم تُحصَّل"),
+    DEFERRED:      (BOX_CUSTOMER, "sender_name", "بضاعة آجلة"),
+    COLLECTED:     (BOX_OFFICE,   "from_city",   "بضاعة محصَّلة"),
+}
 
-    # ما سُجِّل سابقاً لنفس الجهة ونفس تاريخ التصدير لا يُعرض كجديد (منع التكرار)
-    booked = {t.ref_no: t for t in _live(db, p.id)
-              if t.txn_type == TXN_CHARGE and (t.ref_no or "").startswith(AUTO_REF)}
-    out = []
-    seen = set()
-    for d in sorted(by_date.values(), key=lambda x: x["export_date"], reverse=True):
-        ref = AUTO_REF + d["export_date"]
+
+def _shipment_parts(s: Shipment, c: dict, gwc: float) -> list[tuple]:
+    """يقسّم الشحنة إلى بنود استحقاق: [(نوع الجهة، اسم الجهة، المبلغ، وصف البند)].
+    الحالة غير المعروفة (أو «مجاناً») لا تُنتج بنداً — فلا يُحمَّل أحد بلا سبب."""
+    parts = []
+    fees = c.get("fees_total", 0.0) or 0.0
+    owner = _FEES_OWNER.get(s.fees_payment or "")
+    if fees > 0 and owner:
+        parts.append((owner[0], getattr(s, owner[1], ""), fees, owner[2]))
+    owner = _COLL_OWNER.get(s.collection_status or "")
+    if gwc > 0 and owner:
+        parts.append((owner[0], getattr(s, owner[1], ""), gwc, owner[2]))
+    return parts
+
+
+def _parts_index(db: Session, only_date: str | None = None) -> dict:
+    """فهرس كل الاستحقاقات المحسوبة: {(نوع الجهة، الاسم، تاريخ التصدير): تفاصيل}.
+    يُبنى مرة واحدة ويخدم كل الجهات، فلا نمرّ على الشحنات مرة لكل جهة."""
+    acc: dict[tuple, dict] = {}
+    for s, c, gwc in _computed_exported(db):
+        d = str(s.export_date)
+        if only_date and d != only_date:
+            continue
+        for box_type, name, amt, why in _shipment_parts(s, c, gwc):
+            name = (name or "").strip()
+            amt = _rint(amt)          # تقريب كل بند أولاً ثم الجمع (نفس منطق الطباعة)
+            if not name or amt <= 0:
+                continue
+            e = acc.setdefault((box_type, name, d),
+                               {"amount": 0, "refs": set(), "why": set()})
+            e["amount"] += amt
+            e["refs"].add(s.ref_no)
+            e["why"].add(why)
+    return acc
+
+
+def _booked(db: Session, party_id: int) -> dict:
+    """الاستحقاقات التلقائية المسجَّلة السارية للجهة: {المرجع: القيد}."""
+    return {t.ref_no: t for t in _live(db, party_id)
+            if t.txn_type == TXN_CHARGE and (t.ref_no or "").startswith(AUTO_REF)}
+
+
+def _auto_rows(db: Session, p: MBox) -> list[dict]:
+    """استحقاقات الجهة مجمّعة بتاريخ التصدير، مع كشف ما صار مخالفاً بعد تعديل شحنة.
+
+    الصف المخالف (stale) لا يُصحَّح تلقائياً — يُعرض للمستخدم مع زر «مزامنة»،
+    و«انتقل إلى» تبيّن الجهة التي صارت تتحمّل المبلغ بعد التعديل."""
+    acc = _parts_index(db)
+    name = (p.name or "").strip()
+    mine = {d: v for (bt, nm, d), v in acc.items() if bt == p.box_type and nm == name}
+    booked = _booked(db, p.id)
+
+    def _moved(d: str) -> list[dict]:
+        """جهات أخرى تتحمّل استحقاقاً بنفس التاريخ — وجهة انتقال المبلغ."""
+        return [{"name": nm, "type": bt, "amount": round(v["amount"], 2)}
+                for (bt, nm, dd), v in acc.items()
+                if dd == d and not (bt == p.box_type and nm == name)]
+
+    out, seen = [], set()
+    for d, v in mine.items():
+        ref = AUTO_REF + d
         seen.add(ref)
         old = booked.get(ref)
-        amount = round(d["amount"], 2)
-        out.append({**d, "amount": amount, "ref_no": ref,
-                    "refs": "، ".join(str(r) for r in sorted(d["refs"])),
-                    "registered": old is not None,
+        amount = round(v["amount"], 2)
+        stale = bool(old and abs(old.amount - amount) > 0.01)
+        out.append({"export_date": d, "amount": amount, "count": len(v["refs"]),
+                    "refs": "، ".join(str(r) for r in sorted(v["refs"])),
+                    "basis": "، ".join(sorted(v["why"])),
+                    "ref_no": ref, "registered": old is not None,
                     "booked_amount": round(old.amount, 2) if old else 0.0,
-                    # مسجَّل بمبلغ يخالف المحسوب الآن (تعديل لاحق على شحنة)
-                    "stale": bool(old and abs(old.amount - amount) > 0.01)})
-    # استحقاق مسجَّل لم يعد له مقابل محسوب (صفر الآن) — يجب أن يظهر كي يُصحَّح
+                    "stale": stale,
+                    "moved_to": _moved(d) if stale else []})
+    # استحقاق مسجَّل لم يعد له مقابل محسوب — انتقلت مسؤوليته لجهة أخرى أو زال
     for ref, old in booked.items():
         if ref in seen:
             continue
-        out.append({"export_date": ref[len(AUTO_REF):], "amount": 0.0, "count": 0,
-                    "refs": "", "ref_no": ref, "registered": True,
-                    "booked_amount": round(old.amount, 2), "stale": True})
+        d = ref[len(AUTO_REF):]
+        out.append({"export_date": d, "amount": 0.0, "count": 0, "refs": "", "basis": "",
+                    "ref_no": ref, "registered": True,
+                    "booked_amount": round(old.amount, 2), "stale": True,
+                    "moved_to": _moved(d)})
     out.sort(key=lambda r: r["export_date"], reverse=True)
     return out
 
 
-def _row_for(db: Session, p: MBox, export_date) -> dict | None:
-    return next((r for r in _auto_rows(db, p)
-                 if r["export_date"] == str(export_date)), None)
+def stale_for_date(db: Session, export_date: str) -> list[dict]:
+    """كل الجهات التي صار استحقاقها المسجَّل مخالفاً للمحسوب في هذا التاريخ."""
+    acc = _parts_index(db, only_date=export_date)
+    ref = AUTO_REF + str(export_date)
+    out = []
+    for party in db.exec(select(MBox)).all():
+        old = _booked(db, party.id).get(ref)
+        target = acc.get((party.box_type, (party.name or "").strip(), str(export_date)))
+        booked_amt = round(old.amount, 2) if old else 0.0
+        target_amt = round(float(target["amount"]), 2) if target else 0.0
+        if old and abs(booked_amt - target_amt) > 0.01:
+            out.append({"party": party.name, "party_id": party.id,
+                        "type": party.box_type, "export_date": str(export_date),
+                        "booked": booked_amt, "computed": target_amt})
+    return out
+
+
+def stale_all(db: Session) -> list[dict]:
+    """كل الاستحقاقات المسجَّلة المخالفة في النظام — لتنبيه المستخدم أينما كان."""
+    acc = _parts_index(db)
+    out = []
+    for party in db.exec(select(MBox)).all():
+        nm = (party.name or "").strip()
+        for ref, old in _booked(db, party.id).items():
+            d = ref[len(AUTO_REF):]
+            target = acc.get((party.box_type, nm, d))
+            target_amt = round(float(target["amount"]), 2) if target else 0.0
+            if abs(round(old.amount, 2) - target_amt) > 0.01:
+                out.append({"party": party.name, "party_id": party.id,
+                            "type": party.box_type, "export_date": d,
+                            "booked": round(old.amount, 2), "computed": target_amt})
+    out.sort(key=lambda r: r["export_date"], reverse=True)
+    return out
 
 
 def _party_by(db: Session, name: str, box_type: str) -> MBox | None:
@@ -582,96 +657,113 @@ def _party_by(db: Session, name: str, box_type: str) -> MBox | None:
                                       MBox.box_type == box_type)).first()
 
 
-def resync_auto_charge(db: Session, party: MBox, export_date, user, why: str) -> dict | None:
-    """يوائم استحقاقاً تلقائياً **مسجَّلاً** مع القيمة المحسوبة الآن.
-
-    لا يُنشئ استحقاقاً لم يُسجَّل أصلاً — فذلك قرار المحاسب، ويظهر له في قائمة
-    «المتاح للتسجيل». والتصحيح يتم بإلغاء القيد القديم (يبقى أثره) وتسجيل بديل
-    بالمبلغ الصحيح، حفاظاً على سلسلة التدقيق."""
-    ref = AUTO_REF + str(export_date)
-    old = next((t for t in _live(db, party.id)
-                if t.txn_type == TXN_CHARGE and t.ref_no == ref), None)
-    if not old:
-        return None
-    row = _row_for(db, party, export_date)
-    new_amount = float(row["amount"]) if row else 0.0
-    if abs(new_amount - old.amount) < 0.01:
-        return None
-
-    who = user.full_name or user.username if user else "النظام"
-    old_amount = old.amount
-    old.is_void = True
-    old.void_reason = f"تعديل شحنة صادرة — {why}"
-    old.voided_by = who
-    old.voided_at = datetime.utcnow()
-    _audit(db, old.id, "إلغاء", {"السبب": old.void_reason,
-                                 "المبلغ السابق": old_amount,
-                                 "المبلغ المحسوب الآن": new_amount}, user)
-    db.add(old)
-
-    created = None
-    if new_amount > 0:
-        created = MTxn(party_id=party.id, txn_date=_as_date(str(export_date)) or date.today(),
-                       txn_type=TXN_CHARGE, amount=new_amount, reason="شحنة",
-                       description=f"استحقاق تلقائي مُصحَّح عن الشحنة الصادرة بتاريخ {export_date}"
-                                   f" ({row['count']} شحنة — قيود: {row['refs'][:200]})",
-                       ref_no=ref,
-                       notes=f"تصحيح آلي بعد {why} — كان {old_amount:g}",
-                       created_by=who)
-        db.add(created)
-    db.commit()
-    return {"party": party.name, "party_id": party.id, "export_date": str(export_date),
-            "old_amount": old_amount, "new_amount": new_amount,
-            "voided_txn": old.id, "reason": why}
+def _void(db: Session, txn: MTxn, reason: str, user) -> float:
+    """يُلغي قيداً ويُبقي أثره في الكشف مع تسجيل السبب في التدقيق."""
+    who = (user.full_name or user.username) if user else "النظام"
+    old_amount = txn.amount
+    txn.is_void = True
+    txn.void_reason = reason
+    txn.voided_by = who
+    txn.voided_at = datetime.utcnow()
+    _audit(db, txn.id, "إلغاء", {"السبب": reason, "المبلغ": old_amount}, user)
+    db.add(txn)
+    return old_amount
 
 
-# انتقال المسؤولية يقع بين هاتين القيمتين فقط؛ التحوّل إلى «واصل نقداً» أو
-# «تم التحصيل» لا يُحرّك القيود تلقائياً (قرار المستخدم) بل يُعلَّم كفارق للمراجعة.
-_FEES_SWAP = {COD, DEFERRED}
-_COLL_SWAP = {NOT_COLLECTED, DEFERRED}
+def resync_export_date(db: Session, export_date, user, note: str = "") -> dict:
+    """**مزامنة بموافقة المستخدم**: تُعيد توزيع استحقاقات تاريخ تصدير على الجهات
+    الصحيحة بعد تعديل شحنة.
+
+    لا شيء يتحرّك تلقائياً في هذا النظام: هذه الدالة تُستدعى فقط حين يضغط
+    المستخدم «مزامنة». القيد المخالف يُلغى (ويبقى أثره) ويُسجَّل بديل بالمبلغ
+    الصحيح، وإن انتقلت المسؤولية إلى جهة أخرى يُسجَّل الاستحقاق عندها —
+    وذلك فقط إن كان لهذا التاريخ قيد مسجَّل أصلاً، فلا نُحمِّل جهة لم يقرّر
+    المحاسب تحميلها يوماً."""
+    d = str(export_date)
+    ref = AUTO_REF + d
+    acc = _parts_index(db, only_date=d)
+    parties = db.exec(select(MBox)).all()
+
+    booked = {}                       # الجهات التي لها قيد مسجَّل لهذا التاريخ
+    for party in parties:
+        t = _booked(db, party.id).get(ref)
+        if t:
+            booked[party.id] = t
+    if not booked:
+        return {"changed": False, "message": "لا يوجد استحقاق مسجَّل لهذا التاريخ",
+                "changes": []}
+
+    why = note or f"مزامنة استحقاقات {d} بعد تعديل الشحنات"
+    who = (user.full_name or user.username) if user else "النظام"
+    changes = []
+    for party in parties:
+        key = (party.box_type, (party.name or "").strip(), d)
+        target = acc.get(key)
+        target_amt = round(float(target["amount"]), 2) if target else 0.0
+        old = booked.get(party.id)
+        old_amt = round(old.amount, 2) if old else 0.0
+        if abs(target_amt - old_amt) < 0.01:
+            continue                  # مطابق — لا يُمَسّ
+        # لا نُنشئ استحقاقاً لجهة بلا قيد سابق إلا إن انتقلت إليها قيمة فعلاً
+        if not old and target_amt <= 0:
+            continue
+        if old:
+            _void(db, old, f"{why} — كان {old_amt:g}", user)
+        if target_amt > 0:
+            db.add(MTxn(
+                party_id=party.id, txn_date=_as_date(d) or date.today(),
+                txn_type=TXN_CHARGE, amount=target_amt, reason="شحنة",
+                description=f"استحقاق تلقائي عن الشحنة الصادرة بتاريخ {d}"
+                            f" ({len(target['refs'])} شحنة — قيود: "
+                            f"{'، '.join(str(r) for r in sorted(target['refs']))[:200]})",
+                ref_no=ref,
+                notes=(f"مزامنة بموافقة المستخدم — "
+                       + (f"كان {old_amt:g}" if old else "انتقل إليها من جهة أخرى")),
+                created_by=who))
+        changes.append({"party": party.name, "party_id": party.id,
+                        "type": party.box_type, "export_date": d,
+                        "old_amount": old_amt, "new_amount": target_amt})
+    if changes:
+        db.commit()
+    return {"changed": bool(changes),
+            "message": "لا توجد فروقات — الاستحقاقات مطابقة" if not changes else "",
+            "changes": changes}
 
 
 def sync_after_shipment_edit(db: Session, sh: Shipment, before: dict, user) -> list[dict]:
-    """يُستدعى بعد تعديل شحنة **صادرة**: إن تبدّلت المسؤولية بين مكتب الوجهة
-    (ضد الدفع / لم يُحصَّل) والمرسِل (آجل)، تُصحَّح الاستحقاقات المسجَّلة للجهتين."""
+    """**كشف فقط بلا أي تعديل.** بعد تعديل شحنة صادرة تتغيّر فيها مسؤولية
+    الاستحقاق، نُخبر المستخدم أن قيوداً مسجَّلة صارت مخالفة — والقرار له:
+    يذهب إلى كشف الحساب ويضغط «مزامنة». لا يُمَسّ أي قيد محاسبي تلقائياً."""
     if sh.export_status != EXPORTED or not sh.export_date:
         return []
-    reasons = []
-    f_old, f_new = before.get("fees_payment"), sh.fees_payment
-    if f_old != f_new and {f_old, f_new} <= _FEES_SWAP:
-        reasons.append(f"دفع الأجور: {f_old} ← {f_new}")
-    c_old, c_new = before.get("collection_status"), sh.collection_status
-    if c_old != c_new and {c_old, c_new} <= _COLL_SWAP:
-        reasons.append(f"حالة التحصيل: {c_old} ← {c_new}")
-    if not reasons:
+    if (before.get("fees_payment") == sh.fees_payment
+            and before.get("collection_status") == sh.collection_status):
         return []
-
-    why = "، ".join(reasons) + f" (القيد {sh.ref_no})"
-    out = []
-    for name, box_type in ((sh.to_city, BOX_OFFICE), (sh.sender_name, BOX_CUSTOMER)):
-        party = _party_by(db, name, box_type)
-        if not party:
-            continue
-        r = resync_auto_charge(db, party, sh.export_date, user, why)
-        if r:
-            out.append(r)
-    return out
+    return stale_for_date(db, str(sh.export_date))
 
 
 @router.post("/auto-charges/resync")
 def resync_endpoint(payload: dict, db: Session = Depends(get_session),
                     user: User = Depends(admin_or_accountant)):
-    """مزامنة يدوية لاستحقاق مسجَّل خالف قيمته المحسوبة (زر «مزامنة»)."""
-    p = db.get(MBox, int(payload.get("party_id") or 0))
-    if not p:
-        raise HTTPException(404, "الجهة غير موجودة")
+    """مزامنة بموافقة المستخدم: تُعيد توزيع استحقاقات تاريخ التصدير على الجهات
+    الصحيحة — بما فيها نقل المبلغ إلى جهة أخرى إن تبدّلت المسؤولية."""
     export_date = str(payload.get("export_date") or "").strip()
     if not export_date:
         raise HTTPException(400, "حدّد تاريخ التصدير")
-    r = resync_auto_charge(db, p, export_date, user, "مزامنة يدوية")
-    if not r:
-        return {"changed": False, "message": "الاستحقاق مطابق للقيمة المحسوبة — لا تغيير"}
-    return {"changed": True, **r, "party_balances": _balances(db, p.id)}
+    pid = int(payload.get("party_id") or 0)
+    p = db.get(MBox, pid) if pid else None
+    r = resync_export_date(db, export_date, user)
+    if p:
+        r["party_balances"] = _balances(db, p.id)
+    return r
+
+
+@router.get("/auto-charges/stale")
+def stale_charges(db: Session = Depends(get_session),
+                  user: User = Depends(admin_or_accountant)):
+    """كل الاستحقاقات المسجَّلة التي لم تعد تطابق الشحنات — تحتاج مزامنة."""
+    rows = stale_all(db)
+    return {"rows": rows, "count": len(rows)}
 
 
 @router.get("/auto-charges")
@@ -682,11 +774,15 @@ def auto_charges(party_id: int, db: Session = Depends(get_session),
         raise HTTPException(404, "الجهة غير موجودة")
     if p.box_type not in (BOX_OFFICE, BOX_CUSTOMER):
         raise HTTPException(400, "الجلب التلقائي متاح لجهات «مكتب» و«زبون» فقط")
-    rule = (("مكتب: ضد الدفع للأجور + ثمن البضاعة والعمولة غير المحصَّلة — لشحنات وجهتها اسم المكتب"
+    rule = (("<b>مكتب الوجهة</b> (شحنات وجهتها اسمه): أجور «ضد الدفع» + بضاعة «لم تُحصَّل».<br>"
+             "<b>مكتب الإرسال</b> (شحنات مصدرها اسمه): أجور «واصل نقداً» + بضاعة «تم التحصيل»."
              if p.box_type == BOX_OFFICE else
-             "زبون: الآجل للأجور + ثمن البضاعة والعمولة الآجلة — لشحنات مرسِلها اسم الزبون")
-            + ". القيم مقرَّبة لأعداد صحيحة: كل شحنة تُقرَّب (النصف فأعلى للأعلى) ثم تُجمع.")
-    return {"party": p.dict(), "rule": rule, "rows": _auto_rows(db, p)}
+             "<b>الزبون المرسِل</b>: أجور «آجل» + بضاعة «آجل» — لشحنات مرسِلها اسم الزبون.")
+            + "<br>الأجور والبضاعة بندان <b>مستقلان</b>: لكلٍّ حالته وجهته، وقد يقع كلٌّ منهما "
+              "على جهة مختلفة في نفس الشحنة. الحالة غير المحدَّدة لا تُنتج استحقاقاً. "
+              "والقيم مقرَّبة لأعداد صحيحة (كل بند يُقرَّب ثم تُجمع).")
+    return {"party": p.dict(), "rule": rule, "rows": _auto_rows(db, p),
+            "stale_count": sum(1 for r in _auto_rows(db, p) if r["stale"])}
 
 
 @router.post("/auto-charges")
