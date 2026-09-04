@@ -122,9 +122,9 @@ VARIABLE_DOCS = [
     ("min_fee_max_weight", "(مهجور) حدّ وزن قديم — يبقى متاحاً لنسخ المعادلات القديمة"),
     ("is_fee_exempt", "هل الصنف معفى من الأجور كلياً؟ (True/False) — قائمة الأصناف من الإعدادات"),
     ("is_free", 'هل دفع الأجور «مجاناً»؟ (True/False) — تُصفَّر أجور الشحنة'),
-    ("tax_advance_rate", "نسبة السلفة الضريبية (افتراضي 0.02)"),
+    ("tax_advance_rate", "نسبة السلفة الضريبية — نسبة الصنف إن حُدِّدت، وإلا الافتراضية"),
     ("commission_rate", "نسبة العمولة (يدوية للشحنة أو الافتراضية 0.05)"),
-    ("consumption_rate", "نسبة الإنفاق من جدول الشرائح"),
+    ("consumption_rate", "نسبة الإنفاق — نسبة الصنف إن حُدِّدت، وإلا جدول 10% أو الشرائح"),
     ("is_company", "هل الشركة اشترت نيابةً عن الزبون؟ (True/False)"),
     ("fees_payment", 'طريقة دفع الأجور — نص: "واصل نقداً" أو "ضد الدفع"'),
     ("financing", "تمويل البضاعة — نص"),
@@ -435,6 +435,20 @@ def tier_rate(syrian_per_ton: float, tiers) -> float:
     return rate
 
 
+def effective_rates(cfg: dict, syrian_per_ton: float, special: bool,
+                    item_tax=None, item_cons=None) -> tuple[float, float]:
+    """(نسبة السلفة، نسبة الإنفاق) الفعليتان لصنف: تجاوز الصنف إن وُجد،
+    وإلا الافتراضي — جدول 10% للأصناف الخاصة أو شريحة الرسم السوري."""
+    tax = item_tax if item_tax is not None else cfg["tax_advance_rate"]
+    if item_cons is not None:
+        cons = item_cons
+    elif special:
+        cons = cfg.get("special_consumption_rate", 0.10)
+    else:
+        cons = tier_rate(syrian_per_ton or 0.0, cfg["tiers"])
+    return float(tax), float(cons)
+
+
 def compute(sh, syrian_per_ton: float, iraqi_per_ton: float = 0.0,
             cfg: dict | None = None, special_consumption: bool = False) -> dict:
     """يستقبل شحنة + الرسم السوري والعراقي للطن (+ إعدادات المعادلات)، ويعيد كل الأرقام المشتقّة.
@@ -463,11 +477,16 @@ def compute(sh, syrian_per_ton: float, iraqi_per_ton: float = 0.0,
         "is_fee_exempt": _norm_ar(sh.item_name) in {_norm_ar(n)
                                                     for n in cfg.get("fee_exempt_items", [])},
         "is_free": (sh.fees_payment or "") == FREE,
-        "tax_advance_rate": cfg["tax_advance_rate"],
+        # النسبتان: ما جُمِّد على الشحنة وقت تسجيلها له الأولوية المطلقة، فتعديل
+        # نسب صنف لاحقاً لا يمسّ شحنة مسجَّلة. والشحنات القديمة (بلا تجميد) تُقرأ
+        # من نسخة المعادلات المثبَّتة عليها كما كان تماماً.
+        "tax_advance_rate": (sh.tax_advance_rate if sh.tax_advance_rate is not None
+                             else cfg["tax_advance_rate"]),
         "commission_rate": crate,
         # أصناف «جدول 10%» تأخذ نسبتها الثابتة مباشرةً — بلا شرائح ولا حدّ أدنى للرسم
-        "consumption_rate": (cfg.get("special_consumption_rate", 0.10) if special_consumption
-                             else tier_rate(eff_syrian_per_ton, cfg["tiers"])),
+        "consumption_rate": (sh.consumption_rate if sh.consumption_rate is not None
+                             else (cfg.get("special_consumption_rate", 0.10) if special_consumption
+                                   else tier_rate(eff_syrian_per_ton, cfg["tiers"]))),
         "is_company": sh.financing == COMPANY,
         "fees_payment": sh.fees_payment or "",
         "financing": sh.financing or "",

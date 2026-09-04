@@ -44,6 +44,9 @@ class Item(SQLModel, table=True):
     # صنف من «جدول 10%»: نسبة رسم الإنفاق الاستهلاكي ثابتة من الإعدادات،
     # ولا تُؤخذ من شرائح الرسم السوري إطلاقاً
     special_consumption: bool = False
+    # تجاوز نسب هذا الصنف — None يعني «استعمل الافتراضي من الطباعة والمعادلات»
+    tax_advance_rate: Optional[float] = None      # نسبة السلفة الضريبية
+    consumption_rate: Optional[float] = None      # نسبة رسم الإنفاق الاستهلاكي
 
 
 class Shipment(SQLModel, table=True):
@@ -116,6 +119,11 @@ class Shipment(SQLModel, table=True):
     branch: str = ""                # الفرع المُنشِئ للسجل = جهة الإرسال (عزل الصلاحيات)
     created_by: str = ""            # اسم مستخدم من سجّل الشحنة
     created_by_name: str = ""       # الاسم الكامل لمن سجّل الشحنة (للعرض)
+
+    # النسبتان مجمَّدتان وقت التسجيل (None في الشحنات القديمة = تُقرأ من نسخة المعادلات
+    # المثبَّتة عليها كما كان، فلا تتغيّر أرقامها إطلاقاً)
+    tax_advance_rate: Optional[float] = None
+    consumption_rate: Optional[float] = None
 
     @field_validator("ship_date", "delivery_date", "export_date", mode="before")
     @classmethod

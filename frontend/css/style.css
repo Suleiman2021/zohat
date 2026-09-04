@@ -102,6 +102,10 @@ form.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
 .badge.warn{background:#fff3cd;color:#8a6500}
 /* صف يحتاج انتباهاً: استحقاق مسجَّل يخالف قيمته المحسوبة */
 tr.warn-row td{background:#fffaf0}
+/* نسبة موروثة من الافتراضي مقابل نسبة خاصة بالصنف */
+.muted{color:var(--muted)}
+.mini.gold-t{color:#8a6d0b;font-weight:700}
+
 /* كتلة عملة مستقلة — تفصل بصرياً حسابات الدولار عن اليورو */
 .cur-block{border-inline-start:3px solid var(--teal);padding-inline-start:10px;margin-bottom:14px}
 .cur-block .sub{margin:0 0 8px}

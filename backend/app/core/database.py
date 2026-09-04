@@ -36,6 +36,8 @@ _MIGRATIONS = {
     "item": [
         ("iraqi_per_ton", "FLOAT DEFAULT 0"),
         ("special_consumption", "INTEGER DEFAULT 0"),
+        ("tax_advance_rate", "FLOAT"),
+        ("consumption_rate", "FLOAT"),
     ],
     "shipment": [
         ("export_status", "TEXT DEFAULT 'قيد التصدير'"),
@@ -51,6 +53,8 @@ _MIGRATIONS = {
         ("driver_name", "TEXT DEFAULT ''"),
         ("calc_version_id", "INTEGER"),
         ("two_party_auto", "INTEGER DEFAULT 1"),
+        ("tax_advance_rate", "FLOAT"),
+        ("consumption_rate", "FLOAT"),
         ("special_consumption", "INTEGER DEFAULT 0"),
     ],
     "mbox": [

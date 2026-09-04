@@ -9,7 +9,8 @@ from ..core.security import (any_role, admin_or_accountant,
 from ..models import (User, Shipment, Item, ROLE_BRANCH, ROLE_BROKER,
                       ROLE_COLLECTOR, ROLE_ACCOUNTANT, ROLE_ADMIN,
                       ROLE_SUPERVISOR, _as_date)
-from ..calc import compute, calc_cfg, cfg_resolver, COMPANY, CUSTOMER
+from ..calc import (compute, calc_cfg, cfg_resolver, effective_rates,
+                    COMPANY, CUSTOMER)
 
 router = APIRouter(prefix="/api/shipments", tags=["shipments"])
 
@@ -36,9 +37,13 @@ EXPORT_FIELDS = {"export_status", "export_date"}
 EXPORTED = "تم التصدير"
 
 
+def _item_of(db: Session, item_name: str) -> Item | None:
+    return db.exec(select(Item).where(Item.name == item_name)).first()
+
+
 def _item_rates(db: Session, item_name: str) -> tuple[float, float, bool]:
     """(الرسم السوري للطن، الرسم العراقي للطن، أهو من «جدول 10%»؟) من قاعدة الأصناف."""
-    it = db.exec(select(Item).where(Item.name == item_name)).first()
+    it = _item_of(db, item_name)
     return ((it.syrian_per_ton, it.iraqi_per_ton, bool(it.special_consumption))
             if it else (0.0, 0.0, False))
 
@@ -81,16 +86,26 @@ def _freeze_special(db: Session, sh: Shipment):
 
 
 def _freeze_item_rates(db: Session, sh: Shipment):
-    """ينسخ رسوم الصنف (السوري والعراقي للطن) إلى الشحنة إن كانت فارغة.
+    """ينسخ رسوم الصنف ونسبتَيه (السلفة والإنفاق) إلى الشحنة إن كانت فارغة.
 
-    بهذا تحمل كل شحنة رسومها الخاصة وقت تسجيلها، فتعديل رسم صنف لاحقاً
-    لا يغيّر أرقام أي شحنة مسجَّلة — يسري على الجديدة فقط. وتجاوز المخلص
-    الكمركي اليدوي يبقى كما هو لأنه يُكتب في نفس الحقلين."""
-    syr, irq, _ = _item_rates(db, sh.item_name)
+    بهذا تحمل كل شحنة أرقامها الخاصة وقت تسجيلها، فتعديل رسم صنف أو نسبه
+    لاحقاً لا يغيّر أرقام أي شحنة مسجَّلة — يسري على الجديدة فقط. وتجاوز
+    المخلص الكمركي اليدوي يبقى كما هو لأنه يُكتب في نفس الحقول."""
+    it = _item_of(db, sh.item_name)
+    syr = it.syrian_per_ton if it else 0.0
+    irq = it.iraqi_per_ton if it else 0.0
     if sh.syrian_per_ton is None:
         sh.syrian_per_ton = syr
     if sh.iraqi_per_ton is None:
         sh.iraqi_per_ton = irq
+    if sh.tax_advance_rate is None or sh.consumption_rate is None:
+        tax, cons = effective_rates(
+            calc_cfg(db), sh.syrian_per_ton, bool(sh.special_consumption),
+            it.tax_advance_rate if it else None, it.consumption_rate if it else None)
+        if sh.tax_advance_rate is None:
+            sh.tax_advance_rate = tax
+        if sh.consumption_rate is None:
+            sh.consumption_rate = cons
 
 
 def _visible(user: User, q):
@@ -142,6 +157,7 @@ def list_shipments(db: Session = Depends(get_session), user: User = Depends(any_
                    to_city: Optional[str] = None, from_city: Optional[str] = None,
                    sender: Optional[str] = None, receiver: Optional[str] = None,
                    item: Optional[str] = None, ref: Optional[str] = None,
+                   driver: Optional[str] = None,
                    fees_payment: Optional[str] = None,
                    financing: Optional[str] = None,
                    export_status: Optional[str] = None,
@@ -159,6 +175,7 @@ def list_shipments(db: Session = Depends(get_session), user: User = Depends(any_
     # رقم القيد: بحث جزئي (يطابق 1005 و05 معاً)
     if ref and str(ref).strip():
         q = q.where(Shipment.ref_no.cast(String).contains(str(ref).strip()))
+    if driver: q = q.where(Shipment.driver_name.contains(driver))
     # الصنف: بحث جزئي بالاسم أو بالكود الجمركي
     if item:
         q = q.where(Shipment.item_name.contains(item) | Shipment.item_code.contains(item))
@@ -433,6 +450,7 @@ def update_shipment(sid: int, patch: dict, db: Session = Depends(get_session),
             sh.syrian_per_ton = None
         if "iraqi_per_ton" not in allowed:
             sh.iraqi_per_ton = None
+        sh.tax_advance_rate = sh.consumption_rate = None   # نسب الصنف الجديد
     if "goods_price" in allowed:
         _sync_financing(sh)       # التمويل يتبع ثمن البضاعة دائماً
     # الشحنة تحمل رسومها دائماً — وإفراغ حقل يدوياً يُعيد تثبيت رسم الصنف الحالي

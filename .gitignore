@@ -32,3 +32,6 @@ desktop/build/
 desktop/dist/
 desktop/*.spec
 desktop/.venv/
+
+# أدوات فحص محلية (لا تُرفع)
+.devtools/

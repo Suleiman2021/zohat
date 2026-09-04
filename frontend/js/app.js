@@ -330,6 +330,7 @@ async function vShipments(){
        <label>المرسِل<input id="sfrom" placeholder="اسم جزئي"></label>
        <label>الصنف<input id="sitem" placeholder="اسم الصنف أو كوده"></label>
        <label>رقم القيد<input id="sref" placeholder="مثال 1005"></label>
+       <label>السائق<input id="sdrv" placeholder="اسم السائق"></label>
        <button class="sm" id="clr">مسح الفلاتر</button>
        ${API.role!=="accountant"?'<button class="primary gold" id="add">＋ شحنة جديدة</button>':''}
      </div>
@@ -338,19 +339,20 @@ async function vShipments(){
      <div id="exportbar"></div>
      <div id="tbl"></div>
    </div>`;
-  const SIDS=["df","dt","tc","snd","sfrom","sitem","sref"];
+  const SIDS=["df","dt","tc","snd","sfrom","sitem","sref","sdrv"];
   const saveFilters = bindFilters(SIDS, st.f);   // استعادة الفلاتر المحفوظة فوراً
   let tab=st.tab;
   let drill=st.drill;                      // تنقّل المصدَّرة: سنة ← شهر ← يوم
 
   const anyFilter=()=>[$("#df").value,$("#dt").value,$("#tc").value,
                        $("#snd").value.trim(),$("#sfrom").value.trim(),
-                       $("#sitem").value.trim(),$("#sref").value.trim()].some(Boolean);
+                       $("#sitem").value.trim(),$("#sref").value.trim(),
+                       $("#sdrv").value.trim()].some(Boolean);
   const load=async(fromSearch)=>{
     saveFilters();
     const params={date_from:$("#df").value,date_to:$("#dt").value,
       to_city:$("#tc").value,receiver:$("#snd").value,sender:$("#sfrom").value,
-      item:$("#sitem").value,ref:$("#sref").value};
+      item:$("#sitem").value,ref:$("#sref").value,driver:$("#sdrv").value};
     if(tab) params.export_status=tab;
     if(isBranch) params.from_city=API.branch;   // صفحة الاستلام تعرض ما أنشأه الفرع فقط
     const rows=await API.get("/api/shipments", params);
@@ -1224,6 +1226,7 @@ async function vReports(){
      <label>المرسِل<input id="rsfrom" placeholder="اسم جزئي"></label>
      <label>الصنف<input id="ritem" placeholder="اسم الصنف أو كوده"></label>
      <label>رقم القيد<input id="rref" placeholder="مثال 1005"></label>
+     <label>السائق<input id="rdrv" placeholder="اسم السائق"></label>
      <label>تمويل البضاعة<select id="rfin">${optsWithAll(FINANCE)}</select></label>
      <label>دفع الأجور<select id="rfp">${optsWithAll(PAY)}</select></label>
      <label>حالة الجمركة<select id="rcs">${optsWithAll(CUSTOMS_ST)}</select></label>
@@ -1272,7 +1275,7 @@ async function vReports(){
   const filters=()=>({
     date_from:$("#rdf").value, date_to:$("#rdt").value, from_city:$("#rfc").value,
     to_city:$("#rtc").value, receiver:$("#rsnd").value, sender:$("#rsfrom").value,
-    item:$("#ritem").value, ref:$("#rref").value,
+    item:$("#ritem").value, ref:$("#rref").value, driver:$("#rdrv").value,
     financing:$("#rfin").value, fees_payment:$("#rfp").value,
     customs_status:$("#rcs").value, delivery_status:$("#rds").value,
     collection_status:$("#rcol").value});
@@ -1356,7 +1359,7 @@ async function vReports(){
       "لا توجد شحنات صادرة مطابقة للفلاتر");
   };
 
-  const FIDS=["rdf","rdt","rfc","rtc","rsnd","rsfrom","ritem","rref",
+  const FIDS=["rdf","rdt","rfc","rtc","rsnd","rsfrom","ritem","rref","rdrv",
               "rfin","rfp","rcs","rds","rcol","ralpha"];
   const saveRF = bindFilters(FIDS, rst.f);      // استعادة الفلاتر المحفوظة
   // الفلترة فورية — وتبقى داخل المجلد المفتوح بدل القفز لمستوى السنوات
@@ -2168,11 +2171,26 @@ async function mCustoms(box, reload){
 
 // ---------- الأصناف (إدارة + استيراد Excel) ----------
 const escAttr = s => String(s??"").replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;");
+// نسبة كنص مقروء: 0.02 → «2%» و0.105 → «10.5%»
+const pct = v => (Math.round((Number(v) || 0) * 10000) / 100) + "%";
+
 async function vItems(){
   const v=$("#view"); let currentItems=[];
   // تبويبان يتشاركان نفس الواجهة والأزرار — يفرّقهما وسم «جدول 10%» فقط
   let tab="0";                       // "0" عادية، "1" جدول رسم الإنفاق 10%
   const isSp=()=>tab==="1";
+  // الافتراضيات تُقرأ من «الطباعة والمعادلات» لتُعرض بجانب كل صنف
+  const cfg = await API.get("/api/settings/calc").catch(()=>null);
+  const defTax = () => cfg ? cfg.tax_advance_rate : 0.02;
+  const tierRate = syr => {           // نفس بحث الشرائح التصاعدي في الباكند
+    let r = 0;
+    for(const [lo, rt] of (cfg && cfg.tiers || [])){ if((syr||0) >= lo) r = rt; else break; }
+    return r;
+  };
+  const defCons = it => it.special_consumption
+    ? ((cfg && cfg.special_consumption_rate) ?? 0.10) : tierRate(it.syrian_per_ton);
+  const consSrc = it => it.special_consumption
+    ? "جدول 10%" : `شريحة الرسم السوري (${money(it.syrian_per_ton)}/طن)`;
   const SP_TITLE="الأصناف التي عليها نسبة رسم إنفاق استهلاكي بقيمة 10%";
   v.innerHTML=`<h1>الأصناف — قاعدة البيانات</h1>
    <div class="card no-print"><div class="seg" id="iseg">
@@ -2194,12 +2212,53 @@ async function vItems(){
 
   const load=async(q="")=>{
     const its=await API.get("/api/items",{q, limit:2000, special:tab}); currentItems=its;
-    $("#il").innerHTML=wrapTable(`<table><thead><tr><th>الكود</th><th>الصنف</th><th>الرسم السوري/طن</th><th>الرسم العراقي/طن</th><th>${
-      isSp()?"نقل إلى الأصناف العادية":"نقل إلى جدول 10%"}</th><th>عدد الأصناف: ${its.length}</th></tr></thead>
-      <tbody>${its.map(i=>`<tr data-row="${i.id}"><td>${i.code||""}</td><td>${i.name}</td><td>${money(i.syrian_per_ton)}</td><td>${money(i.iraqi_per_ton)}</td>
+    // النسبة المعروضة: تجاوز الصنف إن وُجد، وإلا الافتراضي مع توضيح مصدره
+    const rateCell=(v,def,src)=> v==null
+      ? `<span class="muted">${pct(def)}</span><div class="mini">افتراضي — ${src}</div>`
+      : `<b>${pct(v)}</b><div class="mini gold-t">خاص بالصنف</div>`;
+    $("#il").innerHTML=wrapTable(`<table><thead><tr><th>الكود</th><th>الصنف</th>
+        <th>الرسم السوري/طن</th><th>الرسم العراقي/طن</th>
+        <th>نسبة السلفة الضريبية</th><th>نسبة الإنفاق الاستهلاكي</th>
+        <th>${isSp()?"نقل إلى الأصناف العادية":"نقل إلى جدول 10%"}</th>
+        <th>عدد الأصناف: ${its.length}</th></tr></thead>
+      <tbody>${its.map(i=>`<tr data-row="${i.id}"><td>${i.code||""}</td><td>${i.name}</td>
+        <td>${money(i.syrian_per_ton)}</td><td>${money(i.iraqi_per_ton)}</td>
+        <td>${rateCell(i.tax_advance_rate, defTax(), "الطباعة والمعادلات")}</td>
+        <td>${rateCell(i.consumption_rate, defCons(i), consSrc(i))}</td>
         <td><button class="sm" data-move="${i.id}">${isSp()?"↩ إخراج":"⇄ نقل"}</button></td>
-        <td><button class="sm" data-edit="${i.id}">تعديل</button>
+        <td class="nowrap"><button class="sm" data-rates="${i.id}">٪ النسب</button>
+            <button class="sm" data-edit="${i.id}">تعديل</button>
             <button class="sm danger" data-del="${i.id}">حذف</button></td></tr>`).join("")}</tbody></table>`);
+    // تعديل نسبتَي الصنف — فارغ يعني «استعمل الافتراضي»
+    $("#il").querySelectorAll("[data-rates]").forEach(b=>b.onclick=()=>{
+      const it=currentItems.find(x=>String(x.id)===b.dataset.rates); if(!it) return;
+      const tr=$("#il").querySelector(`tr[data-row="${it.id}"]`);
+      tr.innerHTML=`<td colspan="4"><b>${it.name}</b>
+          <div class="mini">اترك الحقل فارغاً ليعود الصنف إلى النسبة الافتراضية.</div></td>
+        <td><input class="cell-in" data-f="tax_advance_rate" type="number" step="0.001" dir="ltr"
+             value="${it.tax_advance_rate??""}" placeholder="${defTax()}">
+          <div class="mini">افتراضي ${pct(defTax())}</div></td>
+        <td><input class="cell-in" data-f="consumption_rate" type="number" step="0.001" dir="ltr"
+             value="${it.consumption_rate??""}" placeholder="${defCons(it)}">
+          <div class="mini">افتراضي ${pct(defCons(it))} — ${consSrc(it)}</div></td>
+        <td></td>
+        <td class="nowrap"><button class="sm primary" data-save>حفظ</button>
+            <button class="sm" data-cancel>إلغاء</button></td>`;
+      tr.querySelector("[data-cancel]").onclick=()=>load(q);
+      tr.querySelector("[data-save]").onclick=async()=>{
+        const patch={};
+        tr.querySelectorAll(".cell-in").forEach(inp=>{
+          const v=inp.value.trim();
+          patch[inp.dataset.f] = v==="" ? null : Number(v);
+        });
+        for(const k of ["tax_advance_rate","consumption_rate"])
+          if(patch[k]!==null && !(patch[k]>=0)){ toast("النسبة يجب أن تكون رقماً موجباً", true); return; }
+        try{
+          await API.put("/api/items/"+it.id, patch);
+          toast("حُفظت نسب الصنف — تسري على الشحنات الجديدة فقط"); load(q);
+        }catch(err){ toast(err.message, true); }
+      };
+    });
     // نقل صنف بين الجدولين بضغطة — الوسم وحده يحدّد نسبة الإنفاق
     $("#il").querySelectorAll("[data-move]").forEach(b=>b.onclick=async()=>{
       try{
@@ -2221,8 +2280,8 @@ async function vItems(){
         <td><input class="cell-in" data-f="name" value="${escAttr(it.name)}"></td>
         <td><input class="cell-in" data-f="syrian_per_ton" type="number" step="0.01" value="${it.syrian_per_ton}"></td>
         <td><input class="cell-in" data-f="iraqi_per_ton" type="number" step="0.01" value="${it.iraqi_per_ton}"></td>
-        <td></td>
-        <td><button class="sm primary" data-save>حفظ</button>
+        <td colspan="3" class="mini">النسب تُعدَّل من زر «٪ النسب»</td>
+        <td class="nowrap"><button class="sm primary" data-save>حفظ</button>
             <button class="sm" data-cancel>إلغاء</button></td>`;
       tr.querySelector("[data-f=name]").focus();
       tr.querySelector("[data-cancel]").onclick=()=>load(q);
