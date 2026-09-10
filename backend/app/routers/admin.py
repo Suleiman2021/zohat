@@ -9,7 +9,7 @@ from openpyxl.utils import get_column_letter
 
 from ..core.database import get_session
 from ..core.security import admin_only, any_role, hash_pw
-from ..models import User, Item
+from ..models import User, Item, ALL_ROLES
 
 router = APIRouter(prefix="/api", tags=["admin"])
 
@@ -98,13 +98,42 @@ def add_item(it: Item, db: Session = Depends(get_session), user: User = Depends(
     db.add(it); db.commit(); db.refresh(it); return it
 
 
+_ITEM_RATES = {"tax_advance_rate", "consumption_rate"}   # نسب (0.02 = 2%) — فارغ = الافتراضي
+
+
+def _item_value(k: str, v):
+    """يحوّل قيمة حقل صنف ويتحقق منها برسالة واضحة. النص غير الرقمي كانت ترفضه طبقة
+    القاعدة بخطأ خادم (500) بلا تفسير. والأهم: النسبة الأكبر من 1 تُرفض — فكتابة 2
+    بقصد 2% كانت تُحفظ فتُضاعف السلفة الضريبية مئة مرة على كل شحنة جديدة."""
+    if k in ("syrian_per_ton", "iraqi_per_ton") or k in _ITEM_RATES:
+        if k in _ITEM_RATES and v in (None, ""):
+            return None
+        try:
+            n = float(v or 0)
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"قيمة غير رقمية في «{k}»")
+        if n != n or n < 0:
+            raise HTTPException(400, f"«{k}» يجب ألا يكون سالباً")
+        if k in _ITEM_RATES and n > 1:
+            raise HTTPException(400, "النسبة تُكتب كسر عشري: 0.02 تعني 2% — لا 2")
+        return n
+    if k == "special_consumption":
+        return bool(v)
+    return "" if v is None else str(v).strip()
+
+
 @router.put("/items/{iid}")
 def edit_item(iid: int, patch: dict, db: Session = Depends(get_session),
               user: User = Depends(admin_only)):
     it = db.get(Item, iid)
-    if not it: raise HTTPException(404)
-    for k, v in patch.items():
-        if hasattr(it, k): setattr(it, k, v)
+    if not it:
+        raise HTTPException(404, "الصنف غير موجود")
+    values = {k: _item_value(k, v) for k, v in patch.items()
+              if k != "id" and hasattr(it, k)}          # المعرّف لا يُعدَّل
+    if "name" in values and not values["name"]:
+        raise HTTPException(400, "اسم الصنف مطلوب")
+    for k, v in values.items():
+        setattr(it, k, v)
     db.add(it); db.commit(); db.refresh(it); return it
 
 
@@ -214,11 +243,20 @@ def users(db: Session = Depends(get_session), user: User = Depends(admin_only)):
 
 @router.post("/users")
 def add_user(payload: dict, db: Session = Depends(get_session), user: User = Depends(admin_only)):
-    if db.exec(select(User).where(User.username == payload["username"])).first():
+    username = (payload.get("username") or "").strip()
+    password = payload.get("password") or ""
+    role = payload.get("role") or "branch"
+    if not username:
+        raise HTTPException(400, "اسم المستخدم مطلوب")
+    if len(password) < 6:
+        raise HTTPException(400, "كلمة المرور يجب ألا تقل عن 6 أحرف")
+    if role not in ALL_ROLES:
+        raise HTTPException(400, "دور غير معروف")
+    if db.exec(select(User).where(User.username == username)).first():
         raise HTTPException(400, "اسم المستخدم موجود")
-    u = User(username=payload["username"], full_name=payload.get("full_name", ""),
-             role=payload.get("role", "branch"), branch=payload.get("branch", ""),
-             hashed_password=hash_pw(payload["password"]))
+    u = User(username=username, full_name=payload.get("full_name", ""),
+             role=role, branch=payload.get("branch", ""),
+             hashed_password=hash_pw(password))
     db.add(u); db.commit(); db.refresh(u)
     return {"id": u.id, "username": u.username}
 
@@ -236,7 +274,12 @@ def edit_user(uid: int, payload: dict, db: Session = Depends(get_session),
             raise HTTPException(400, "اسم المستخدم موجود")
         u.username = new_username
     if "full_name" in payload: u.full_name = payload["full_name"]
-    if payload.get("role"): u.role = payload["role"]
+    if payload.get("role"):
+        if payload["role"] not in ALL_ROLES:
+            raise HTTPException(400, "دور غير معروف")
+        u.role = payload["role"]
+    if payload.get("password") and len(payload["password"]) < 6:
+        raise HTTPException(400, "كلمة المرور يجب ألا تقل عن 6 أحرف")
     if "branch" in payload: u.branch = payload["branch"]
     if "is_active" in payload: u.is_active = bool(payload["is_active"])
     if payload.get("password"):

@@ -21,10 +21,10 @@ from sqlmodel import Session, select
 from ..core.database import get_session
 from ..core.security import admin_or_accountant
 from ..models import (User, MBox, MEntry, MTxn, MTxnAudit, MCustomsCheck, MExportRevenue,
-                      Shipment, Item,
+                      MFxRate, Shipment, Item,
                       BOX_TYPES, BOX_OFFICE, BOX_CUSTOMER,
-                      TXN_TYPES, TXN_CHARGE, TXN_PAYMENT, TXN_EXPENSE,
-                      CHARGE_REASONS, CURRENCIES, CUR_USD, _as_date)
+                      TXN_TYPES, TXN_CHARGE, TXN_PAYMENT, TXN_EXPENSE, TXN_MERCHANT,
+                      CHARGE_REASONS, CURRENCIES, CUR_USD, CUR_IQD, _as_date)
 from ..calc import compute, cfg_resolver, COD, DEFERRED, CASH, COLLECTED
 
 EXPORTED = "تم التصدير"
@@ -33,8 +33,13 @@ AUTO_REF = "تصدير:"      # بادئة المرجع للاستحقاقات �
 
 router = APIRouter(prefix="/api/mahmoud", tags=["mahmoud"])
 
-# إشارة كل نوع في معادلة الرصيد
-SIGN = {TXN_CHARGE: +1, TXN_PAYMENT: -1, TXN_EXPENSE: -1}
+MERCHANT_REF = "تاجر:"    # بادئة مرجع بدل التاجر المقترح من شحنة (+ معرّف الشحنة)
+
+# إشارة كل نوع في معادلة الرصيد — المصدر الوحيد لاتجاه أي قيد
+SIGN = {TXN_CHARGE: +1, TXN_PAYMENT: -1, TXN_EXPENSE: -1, TXN_MERCHANT: -1}
+# مفتاح كل نوع في المجاميع
+KIND = {TXN_CHARGE: "charges", TXN_PAYMENT: "payments",
+        TXN_EXPENSE: "expenses", TXN_MERCHANT: "merchant"}
 
 
 # ============================ أدوات داخلية ============================
@@ -58,16 +63,22 @@ def _cur(t: MTxn) -> str:
 
 
 def _totals(rows: list[MTxn], currency: str | None = None) -> dict:
-    """مجاميع عملة واحدة. currency=None ← كل القيود (للتوافق مع الاستدعاءات القديمة)."""
+    """مجاميع عملة واحدة. currency=None ← كل القيود (للتوافق مع الاستدعاءات القديمة).
+
+    الرصيد يُبنى من إشارة كل نوع (SIGN) لا من قائمة مكتوبة يدوياً — فإضافة نوع
+    جديد لا يمكن أن تُسقِطه من الرصيد سهواً."""
     if currency is not None:
         rows = [t for t in rows if _cur(t) == currency]
-    charges = sum(t.amount for t in rows if t.txn_type == TXN_CHARGE)
-    payments = sum(t.amount for t in rows if t.txn_type == TXN_PAYMENT)
-    expenses = sum(t.amount for t in rows if t.txn_type == TXN_EXPENSE)
-    return {"charges": round(charges, 2), "payments": round(payments, 2),
-            "expenses": round(expenses, 2),
-            "settled": round(payments + expenses, 2),
-            "balance": round(charges - payments - expenses, 2)}
+    acc = {k: 0.0 for k in KIND.values()}
+    balance = 0.0
+    for t in rows:
+        if t.txn_type in KIND:
+            acc[KIND[t.txn_type]] += t.amount
+        balance += SIGN.get(t.txn_type, 0) * t.amount
+    return {**{k: round(v, 2) for k, v in acc.items()},
+            # كل ما يُنقص المستحق: دفعات + مصاريف + بدل تاجر
+            "settled": round(acc["payments"] + acc["expenses"] + acc["merchant"], 2),
+            "balance": round(balance, 2)}
 
 
 def _by_currency(rows: list[MTxn]) -> list[dict]:
@@ -239,31 +250,87 @@ def statement(pid: int, db: Session = Depends(get_session), user: User = Depends
     }
 
 
+# ============================ سعر صرف الدينار ============================
+def _current_fx(db: Session) -> MFxRate | None:
+    """سعر الصرف الساري = أحدث سعر مسجَّل."""
+    return db.exec(select(MFxRate).order_by(MFxRate.set_at.desc(), MFxRate.id.desc())).first()
+
+
+def _positive_amount(raw, label: str = "المبلغ") -> float:
+    """يحوّل إدخالاً إلى مبلغ موجب — ويرفض النص غير الرقمي برسالة واضحة
+    بدل انهيار الخادم أو تخزين قيمة تُفسد كل حساب لاحق."""
+    try:
+        v = round(float(raw), 2)
+    except (TypeError, ValueError):
+        raise HTTPException(400, f"{label} غير صحيح")
+    if v != v or v <= 0:                         # v != v يلتقط NaN
+        raise HTTPException(400, f"{label} يجب أن يكون أكبر من صفر")
+    return v
+
+
+def _from_iqd(db: Session, iqd_raw, rate: float | None = None) -> tuple[float, float, float]:
+    """(المبلغ بالدولار، المبلغ بالدينار، سعر الصرف المستعمل) — التحويل على الخادم."""
+    iqd = _positive_amount(iqd_raw, "المبلغ بالدينار")
+    if rate is None:
+        fx = _current_fx(db)
+        if not fx:
+            raise HTTPException(400, "لم يُضبط سعر صرف الدينار بعد — اضبطه من تبويب «سعر صرف الدينار»")
+        rate = fx.iqd_per_usd
+    usd = round(iqd / rate, 2)
+    if usd <= 0:
+        raise HTTPException(400, "المبلغ بالدينار أصغر من أن يُحوَّل إلى سنت واحد")
+    return usd, iqd, rate
+
+
+@router.get("/fx-rate")
+def get_fx_rate(db: Session = Depends(get_session), user: User = Depends(admin_or_accountant)):
+    rows = db.exec(select(MFxRate).order_by(MFxRate.set_at.desc(), MFxRate.id.desc())).all()
+    fmt = lambda r: {"id": r.id, "iqd_per_usd": r.iqd_per_usd, "notes": r.notes,
+                     "set_by": r.set_by,
+                     "set_at": r.set_at.strftime("%Y-%m-%d %H:%M") if r.set_at else ""}
+    return {"current": fmt(rows[0]) if rows else None, "history": [fmt(r) for r in rows[:50]]}
+
+
+@router.post("/fx-rate")
+def set_fx_rate(payload: dict, db: Session = Depends(get_session),
+                user: User = Depends(admin_or_accountant)):
+    """تثبيت سعر صرف جديد — يسري على القيود الجديدة فقط، والقديمة تحتفظ بسعرها."""
+    rate = _positive_amount(payload.get("iqd_per_usd"), "سعر الصرف")
+    r = MFxRate(iqd_per_usd=rate, notes=(payload.get("notes") or "").strip(),
+                set_by=user.full_name or user.username)
+    db.add(r); db.commit(); db.refresh(r)
+    return get_fx_rate(db, user)
+
+
 # ============================ القيود ============================
 @router.post("/txn")
 def add_txn(payload: dict, db: Session = Depends(get_session),
             user: User = Depends(admin_or_accountant)):
-    """إضافة قيد: استحقاق (يزيد) أو دفعة/مصروف (يُنقص)."""
+    """إضافة قيد: استحقاق (يزيد) أو دفعة/مصروف/بدل تاجر (يُنقص).
+    يقبل الإدخال بالدينار (iqd_amount) فيُحوَّل إلى دولار بسعر الصرف الساري."""
     party = db.get(MBox, int(payload.get("party_id") or 0))
     if not party:
         raise HTTPException(400, "اختر جهة صحيحة")
     ttype = payload.get("txn_type")
     if ttype not in TXN_TYPES:
         raise HTTPException(400, "نوع العملية غير معروف")
-    try:
-        amount = round(float(payload.get("amount") or 0), 2)
-    except (TypeError, ValueError):
-        raise HTTPException(400, "المبلغ غير صحيح")
-    if amount <= 0:
-        raise HTTPException(400, "المبلغ يجب أن يكون أكبر من صفر")
     currency = (payload.get("currency") or CUR_USD).strip() or CUR_USD
     if currency not in CURRENCIES:
         raise HTTPException(400, "عملة غير معروفة")
+
+    orig_amount, orig_currency, fx_rate = None, "", None
+    if payload.get("iqd_amount") not in (None, ""):
+        # الدينار يُحوَّل دائماً إلى الدولار (حسابات الدينار لا تُمسك بعملتها)
+        amount, orig_amount, fx_rate = _from_iqd(db, payload.get("iqd_amount"))
+        currency, orig_currency = CUR_USD, CUR_IQD
+    else:
+        amount = _positive_amount(payload.get("amount"))
 
     # الرصيد الدائن مسموح دائماً: الدفعة قد تتجاوز المستحق فيصبح للجهة رصيد لها
     t = MTxn(party_id=party.id,
              txn_date=_as_date(payload.get("txn_date")) or date.today(),
              txn_type=ttype, amount=amount, currency=currency,
+             orig_amount=orig_amount, orig_currency=orig_currency, fx_rate=fx_rate,
              reason=(payload.get("reason") or "").strip(),
              description=(payload.get("description") or "").strip(),
              payment_method=(payload.get("payment_method") or "").strip(),
@@ -271,8 +338,9 @@ def add_txn(payload: dict, db: Session = Depends(get_session),
              notes=(payload.get("notes") or "").strip(),
              created_by=user.full_name or user.username)
     db.add(t); db.commit(); db.refresh(t)
-    return {**_txn_out(t, party.name), "party_balances": _balances(db, party.id),
-            "party_balance": _balances(db, party.id).get(currency, 0.0)}
+    balances = _balances(db, party.id)
+    return {**_txn_out(t, party.name), "party_balances": balances,
+            "party_balance": balances.get(currency, 0.0)}
 
 
 @router.put("/txn/{tid}")
@@ -287,18 +355,34 @@ def edit_txn(tid: int, patch: dict, db: Session = Depends(get_session),
 
     editable = {"txn_date", "amount", "currency", "reason", "description",
                 "payment_method", "ref_no", "notes"}
-    before = {k: getattr(t, k) for k in editable}
+    tracked = editable | {"orig_amount", "orig_currency", "fx_rate"}
+    before = {k: getattr(t, k) for k in tracked}
+
+    if patch.get("iqd_amount") not in (None, ""):
+        # قيد أُدخل بالدينار يُعاد تحويله **بسعره الأصلي** — فتصحيح خطأ في الرقم
+        # لا يُعيد تسعيره بسعر يوم التعديل خفيةً. والقيد الجديد على الدينار يأخذ الساري.
+        keep_rate = t.fx_rate if t.orig_currency == CUR_IQD and t.fx_rate else None
+        t.amount, t.orig_amount, t.fx_rate = _from_iqd(db, patch["iqd_amount"], keep_rate)
+        t.currency, t.orig_currency = CUR_USD, CUR_IQD
+        patch = {k: v for k, v in patch.items() if k not in ("amount", "currency")}
+    elif "amount" in patch and t.orig_currency:
+        # تعديل المبلغ بالدولار مباشرةً يقطع صلته بالدينار — لا نُبقي أصلاً مضلِّلاً
+        t.orig_amount, t.orig_currency, t.fx_rate = None, "", None
+
     for k, v in patch.items():
         if k not in editable:
             continue
         if k == "amount":
-            v = round(float(v or 0), 2)
-            if v <= 0:
-                raise HTTPException(400, "المبلغ يجب أن يكون أكبر من صفر")
+            v = _positive_amount(v)
+        if k == "currency":
+            v = (v or "").strip()
+            if v not in CURRENCIES:
+                raise HTTPException(400, "عملة غير معروفة")
         if k == "txn_date":
             v = _as_date(v) or t.txn_date
         setattr(t, k, v)
-    after = {k: getattr(t, k) for k in editable}
+    after = {k: getattr(t, k) for k in tracked}
+    editable = tracked
     changed = {k: {"قبل": before[k], "بعد": after[k]} for k in editable if before[k] != after[k]}
     if not changed:
         return _txn_out(t, "")
@@ -420,35 +504,34 @@ def summary(db: Session = Depends(get_session), user: User = Depends(admin_or_ac
     rows = _live(db, date_from=date_from, date_to=date_to)
     tot = _totals(rows)
 
-    KIND = {TXN_CHARGE: "charges", TXN_PAYMENT: "payments", TXN_EXPENSE: "expenses"}
+    kinds = tuple(KIND.values())
 
     # التجميعات مفتاحها (المجموعة، العملة) فلا تُخلط عملة بأخرى في أي سطر
     def _group(key_of, label):
         acc: dict[tuple, dict] = {}
         for t in rows:
             k = key_of(t)
-            if k is None:
+            if k is None or t.txn_type not in KIND:
                 continue
             c = _cur(t)
-            d = acc.setdefault((k, c), {label: k, "currency": c, "charges": 0.0,
-                                        "payments": 0.0, "expenses": 0.0, "count": 0})
+            d = acc.setdefault((k, c), {label: k, "currency": c, "count": 0, "balance": 0.0,
+                                        **{x: 0.0 for x in kinds}})
             d[KIND[t.txn_type]] += t.amount
+            d["balance"] += SIGN[t.txn_type] * t.amount
             d["count"] += 1
         out = []
         for d in acc.values():
-            if not any(abs(d[x]) > 0.001 for x in ("charges", "payments", "expenses")):
+            if not any(abs(d[x]) > 0.001 for x in kinds):
                 continue
-            out.append({**d, "charges": round(d["charges"], 2),
-                        "payments": round(d["payments"], 2),
-                        "expenses": round(d["expenses"], 2),
-                        "balance": round(d["charges"] - d["payments"] - d["expenses"], 2)})
+            out.append({**d, **{x: round(d[x], 2) for x in kinds},
+                        "balance": round(d["balance"], 2)})
         return out
 
     by_type = sorted(_group(lambda t: (parties[t.party_id].box_type
                                        if t.party_id in parties else "—"), "type"),
                      key=lambda x: (x["type"], x["currency"]))
     by_reason = sorted(_group(lambda t: t.reason or "بلا سبب", "reason"),
-                       key=lambda x: -(x["charges"] + x["payments"] + x["expenses"]))
+                       key=lambda x: -sum(x[k] for k in kinds))
 
     # الجهات ذات الرصيد الأعلى (كل الفترات) — سطر لكل جهة وعملة
     all_rows = _live(db)
@@ -731,15 +814,226 @@ def resync_export_date(db: Session, export_date, user, note: str = "") -> dict:
 
 
 def sync_after_shipment_edit(db: Session, sh: Shipment, before: dict, user) -> list[dict]:
-    """**كشف فقط بلا أي تعديل.** بعد تعديل شحنة صادرة تتغيّر فيها مسؤولية
-    الاستحقاق، نُخبر المستخدم أن قيوداً مسجَّلة صارت مخالفة — والقرار له:
-    يذهب إلى كشف الحساب ويضغط «مزامنة». لا يُمَسّ أي قيد محاسبي تلقائياً."""
-    if sh.export_status != EXPORTED or not sh.export_date:
+    """**كشف فقط بلا أي تعديل.** بعد تعديل شحنة نُخبر المستخدم أن قيوداً مسجَّلة
+    صارت مخالفة — والقرار له: يضغط «مزامنة» في كشف الحساب.
+
+    أي حقل قد يُخالِف قيداً مسجَّلاً: حالتا الدفع والتحصيل، جهتا الإرسال والاستلام،
+    المرسِل، الوزن والقيم، وتاريخ التصدير نفسه (فيُفحص التاريخان القديم والجديد)."""
+    out = []
+    dates = {str(d) for d in (sh.export_date if sh.export_status == EXPORTED else None,
+                              before.get("export_date")) if d}
+    for d in sorted(dates):
+        out += stale_for_date(db, d)
+    out += [{**r, "kind": "بدل تاجر"} for r in merchant_stale_for_shipment(db, sh.id)]
+    return out
+
+
+# ============================ بدل التاجر ============================
+# حين تشتري الشركة البضاعة نيابةً عن الزبون (ثمن البضاعة > 0) يدفع **مكتب الإرسال**
+# ثمنها للتاجر، فيُقترح قيد «بدل تاجر» في حساب ذلك المكتب. لا يُسجَّل شيء قبل موافقة
+# المستخدم، وأي تعديل لاحق على الشحنة يجعل القيد «مرفوضاً» حتى يُزامِنه.
+def _merchant_index(db: Session) -> dict:
+    """{معرّف الشحنة: الاقتراح} لكل شحنة فيها ثمن بضاعة مدفوع نيابةً عن الزبون."""
+    out = {}
+    q = select(Shipment).where(Shipment.goods_price > 0)
+    for s in db.exec(q).all():
+        amt = _rint(s.goods_price)          # تقريب لعدد صحيح — نفس منطق الجلب التلقائي
+        office = (s.from_city or "").strip()
+        if amt <= 0 or not office:
+            continue
+        out[s.id] = {"shipment_id": s.id, "ship_ref": s.ref_no, "ship_date": str(s.ship_date),
+                     "office": office, "amount": float(amt),
+                     "receiver": s.receiver_name or "", "sender": s.sender_name or "",
+                     "item": s.item_name or "", "export_status": s.export_status}
+    return out
+
+
+def _merchant_booked(db: Session, party_id: int | None = None) -> dict:
+    """{معرّف الشحنة: [قيود بدل التاجر السارية]} — لجهة واحدة أو للكل."""
+    q = select(MTxn).where(MTxn.is_void == False,                     # noqa: E712
+                           MTxn.txn_type == TXN_MERCHANT)
+    if party_id:
+        q = q.where(MTxn.party_id == party_id)
+    out: dict[int, list] = {}
+    for t in db.exec(q).all():
+        ref = t.ref_no or ""
+        if not ref.startswith(MERCHANT_REF):
+            continue                      # بدل تاجر يدوي — ليس مقترحاً من شحنة
+        try:
+            out.setdefault(int(ref[len(MERCHANT_REF):]), []).append(t)
+        except ValueError:
+            continue
+    return out
+
+
+def _merchant_rows(db: Session, p: MBox) -> list[dict]:
+    """اقتراحات بدل التاجر لمكتب: غير معتمَدة، معتمَدة، ومرفوضة بعد تعديل الشحنة."""
+    if p.box_type != BOX_OFFICE:
         return []
-    if (before.get("fees_payment") == sh.fees_payment
-            and before.get("collection_status") == sh.collection_status):
+    name = (p.name or "").strip()
+    index = _merchant_index(db)
+    booked = _merchant_booked(db, p.id)
+    rows, seen = [], set()
+    for sid, m in index.items():
+        if m["office"] != name:
+            continue
+        seen.add(sid)
+        mine = booked.get(sid, [])
+        got = round(sum(t.amount for t in mine), 2)
+        rows.append({**m, "registered": bool(mine), "booked_amount": got,
+                     "stale": bool(mine) and abs(got - m["amount"]) > 0.01,
+                     "moved_to": ""})
+    # معتمَد هنا لكن الشحنة حُذفت، أو زال ثمنها، أو صار مكتب إرسالها غير هذا المكتب
+    for sid, lst in booked.items():
+        if sid in seen:
+            continue
+        m = index.get(sid)
+        rows.append({"shipment_id": sid, "ship_ref": m["ship_ref"] if m else "—",
+                     "ship_date": m["ship_date"] if m else str(lst[0].txn_date),
+                     "office": name, "amount": 0.0,
+                     "receiver": m["receiver"] if m else "", "sender": m["sender"] if m else "",
+                     "item": m["item"] if m else "", "export_status": m["export_status"] if m else "",
+                     "registered": True, "booked_amount": round(sum(t.amount for t in lst), 2),
+                     "stale": True,
+                     "moved_to": (m["office"] if m else "الشحنة محذوفة")})
+    rows.sort(key=lambda r: (r["ship_date"], str(r["ship_ref"])), reverse=True)
+    return rows
+
+
+def merchant_stale_for_shipment(db: Session, shipment_id: int) -> list[dict]:
+    """قيود بدل التاجر المسجَّلة لشحنة ولم تعد تطابقها."""
+    m = _merchant_index(db).get(shipment_id)
+    lst = _merchant_booked(db).get(shipment_id, [])
+    if not lst:
         return []
-    return stale_for_date(db, str(sh.export_date))
+    parties = {x.id: x for x in db.exec(select(MBox)).all()}
+    out = []
+    for t in lst:
+        party = parties.get(t.party_id)
+        ok = (m and party and (party.name or "").strip() == m["office"]
+              and abs(t.amount - m["amount"]) < 0.01)
+        if not ok:
+            out.append({"party": party.name if party else "—", "party_id": t.party_id,
+                        "type": party.box_type if party else "",
+                        "shipment_id": shipment_id,
+                        "booked": round(t.amount, 2),
+                        "computed": m["amount"] if (m and party and
+                                                    (party.name or "").strip() == m["office"])
+                        else 0.0})
+    return out
+
+
+def _register_merchant(db: Session, party: MBox, m: dict, user, note: str) -> MTxn:
+    t = MTxn(party_id=party.id, txn_date=_as_date(m["ship_date"]) or date.today(),
+             txn_type=TXN_MERCHANT, amount=m["amount"], currency=CUR_USD,
+             reason="بدل تاجر",
+             description=(f"ثمن بضاعة دُفع للتاجر نيابةً عن الزبون — القيد {m['ship_ref']}"
+                          f" · {m['item'] or 'صنف'} · المستلِم {m['receiver'] or '—'}"),
+             ref_no=f"{MERCHANT_REF}{m['shipment_id']}", notes=note,
+             created_by=(user.full_name or user.username) if user else "النظام")
+    db.add(t)
+    return t
+
+
+def resync_merchant(db: Session, shipment_id: int, user) -> dict:
+    """مزامنة بدل تاجر شحنة بموافقة المستخدم: يُلغى ما خالفها ويُسجَّل الصحيح
+    في مكتب إرسالها الحالي — فقط إن كان لها بدل تاجر معتمَد أصلاً."""
+    lst = _merchant_booked(db).get(shipment_id, [])
+    if not lst:
+        return {"changed": False, "message": "لا يوجد بدل تاجر معتمَد لهذه الشحنة", "changes": []}
+    m = _merchant_index(db).get(shipment_id)
+    target = _party_by(db, m["office"], BOX_OFFICE) if m else None
+    if m and not target:                  # نرفض قبل أي إلغاء — لا تُترك الحسابات نصف مُزامَنة
+        raise HTTPException(400, f"لا توجد جهة من نوع «مكتب» باسم «{m['office']}» — "
+                                 "أضفها من تبويب الجهات ثم أعد المزامنة")
+    changes = []
+    keep = None
+    for t in lst:
+        if (target and t.party_id == target.id and keep is None
+                and abs(t.amount - m["amount"]) < 0.01):
+            keep = t                       # قيد صحيح في مكانه — يبقى كما هو
+            continue
+        _void(db, t, f"مزامنة بدل التاجر بعد تعديل الشحنة — كان {t.amount:g}", user)
+        changes.append({"party_id": t.party_id, "old_amount": round(t.amount, 2),
+                        "new_amount": 0.0})
+    if m and target and keep is None:
+        _register_merchant(db, target, m, user, "مزامنة بموافقة المستخدم بعد تعديل الشحنة")
+        changes.append({"party_id": target.id, "old_amount": 0.0, "new_amount": m["amount"]})
+    if changes:
+        db.commit()
+    names = {x.id: x.name for x in db.exec(select(MBox)).all()}
+    for c in changes:
+        c["party"] = names.get(c["party_id"], "—")
+    return {"changed": bool(changes), "changes": changes,
+            "message": "" if changes else "بدل التاجر مطابق للشحنة — لا تغيير"}
+
+
+@router.get("/merchant")
+def merchant_list(party_id: int, db: Session = Depends(get_session),
+                  user: User = Depends(admin_or_accountant)):
+    p = db.get(MBox, party_id)
+    if not p:
+        raise HTTPException(404, "الجهة غير موجودة")
+    rows = _merchant_rows(db, p)
+    return {"rows": rows,
+            "pending": sum(1 for r in rows if not r["registered"]),
+            "stale": sum(1 for r in rows if r["stale"])}
+
+
+@router.post("/merchant")
+def merchant_approve(payload: dict, db: Session = Depends(get_session),
+                     user: User = Depends(admin_or_accountant)):
+    """اعتماد بدل تاجر مقترح (أو كل المقترحات غير المعتمَدة لمكتب) — المبلغ من الخادم."""
+    p = db.get(MBox, int(payload.get("party_id") or 0))
+    if not p or p.box_type != BOX_OFFICE:
+        raise HTTPException(400, "بدل التاجر يُعتمَد لجهات من نوع «مكتب» فقط")
+    rows = _merchant_rows(db, p)
+    if payload.get("all"):
+        todo = [r for r in rows if not r["registered"]]
+    else:
+        sid = int(payload.get("shipment_id") or 0)
+        todo = [r for r in rows if r["shipment_id"] == sid]
+        if not todo:
+            raise HTTPException(400, "لا يوجد بدل تاجر مقترح لهذه الشحنة في هذا المكتب")
+        if todo[0]["registered"]:
+            raise HTTPException(400, "بدل التاجر لهذه الشحنة معتمَد مسبقاً — لن يُكرَّر")
+    for r in todo:
+        _register_merchant(db, p, r, user, "اعتُمد من اقتراح الشحنة")
+    db.commit()
+    return {"approved": len(todo), "party_balances": _balances(db, p.id)}
+
+
+@router.post("/merchant/resync")
+def merchant_resync(payload: dict, db: Session = Depends(get_session),
+                    user: User = Depends(admin_or_accountant)):
+    sid = int(payload.get("shipment_id") or 0)
+    if not sid:
+        raise HTTPException(400, "حدّد الشحنة")
+    return resync_merchant(db, sid, user)
+
+
+@router.get("/merchant/pending")
+def merchant_pending(db: Session = Depends(get_session),
+                     user: User = Depends(admin_or_accountant)):
+    """نظرة عامة: بدل تاجر بانتظار الاعتماد، والمرفوض بعد تعديل الشحنات."""
+    index = _merchant_index(db)
+    booked = _merchant_booked(db)
+    offices = {(x.name or "").strip(): x for x in db.exec(select(MBox)).all()
+               if x.box_type == BOX_OFFICE}
+    pending, missing = [], set()
+    for sid, m in index.items():
+        if sid in booked:
+            continue
+        party = offices.get(m["office"])
+        if not party:
+            missing.add(m["office"])
+        pending.append({**m, "party_id": party.id if party else None})
+    stale = []
+    for sid in booked:
+        stale += merchant_stale_for_shipment(db, sid)
+    return {"pending": sorted(pending, key=lambda r: r["ship_date"], reverse=True),
+            "pending_amount": round(sum(r["amount"] for r in pending), 2),
+            "stale": stale, "missing_offices": sorted(missing)}
 
 
 @router.post("/auto-charges/resync")

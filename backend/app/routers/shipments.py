@@ -6,7 +6,7 @@ from typing import Optional
 from ..core.database import get_session
 from ..core.security import (any_role, admin_or_accountant,
                              admin_or_supervisor, can_register)
-from ..models import (User, Shipment, Item, ROLE_BRANCH, ROLE_BROKER,
+from ..models import (User, Shipment, Item, MBox, BOX_OFFICE, ROLE_BRANCH, ROLE_BROKER,
                       ROLE_COLLECTOR, ROLE_ACCOUNTANT, ROLE_ADMIN,
                       ROLE_SUPERVISOR, _as_date)
 from ..calc import (compute, calc_cfg, cfg_resolver, effective_rates,
@@ -34,7 +34,53 @@ ACCOUNTANT_FIELDS = DEST_FIELDS | {"export_status", "export_date", "financing",
 # حقول التصدير — ممنوعة على مسؤول التجميع (لا يصدّر ولا يغيّر تاريخ الإصدار)
 EXPORT_FIELDS = {"export_status", "export_date"}
 
+# حقول يديرها النظام وحده — لا يعدّلها أي دور عبر طلب تعديل، ولا حتى المدير.
+# بدونها يستطيع طلبٌ عادي تزوير رقم القيد، أو نسبة الشحنة لمسجِّل آخر (فيحذفها
+# مسؤول تجميع غير صاحبها)، أو فكّ تجميد المعادلات والنسب عن شحنة مسجَّلة.
+SYSTEM_FIELDS = {"id", "ref_no", "created_at", "created_by", "created_by_name",
+                 "calc_version_id", "branch", "customs_computed", "two_party_auto",
+                 "special_consumption", "tax_advance_rate", "consumption_rate"}
+
+# الحقول الرقمية — تُحوَّل وتُتحقَّق قبل الحفظ. طبقة القاعدة كانت ترفض النص أصلاً
+# لكن بخطأ خادم (500) بلا تفسير؛ هنا تُرفض برسالة واضحة، وتُرفض القيم السالبة أيضاً
+_INT_FIELDS = {"count"}
+_FLOAT_FIELDS = {"weight_kg", "goods_value", "goods_price", "extra_fees", "syrian_per_ton",
+                 "iraqi_per_ton", "commission_rate", "manual_tax_advance",
+                 "manual_consumption_fee", "two_party_expense"}
+_NULLABLE = {"syrian_per_ton", "iraqi_per_ton", "commission_rate",
+             "manual_tax_advance", "manual_consumption_fee"}
+
 EXPORTED = "تم التصدير"
+PENDING_EXPORT = "قيد التصدير"
+
+
+def _coerce(k: str, v):
+    """يحوّل قيمة حقل رقمي من الطلب، ويرفض غير الرقمي أو السالب برسالة واضحة (400)."""
+    if k not in _INT_FIELDS and k not in _FLOAT_FIELDS:
+        return v
+    if v in (None, ""):
+        if k in _NULLABLE:
+            return None
+        return 0 if k in _INT_FIELDS else 0.0
+    try:
+        n = int(float(v)) if k in _INT_FIELDS else float(v)
+    except (TypeError, ValueError):
+        raise HTTPException(400, f"قيمة غير رقمية في الحقل «{k}»")
+    if n != n or n < 0:                       # n != n يلتقط NaN
+        raise HTTPException(400, f"القيمة في الحقل «{k}» يجب ألا تكون سالبة")
+    return n
+
+
+def _normalize_export(sh: Shipment):
+    """حالة التصدير وتاريخه متلازمان: المُصدَّرة لها تاريخ دائماً، وقيد التصدير بلا تاريخ.
+    شحنة «مُصدَّرة» بلا تاريخ تسقط من المجلدات ومن الاستحقاقات التلقائية بصمت."""
+    if not (sh.export_status or "").strip():
+        sh.export_status = PENDING_EXPORT
+    if sh.export_status == EXPORTED:
+        if not sh.export_date:
+            raise HTTPException(400, "الشحنة المُصدَّرة تحتاج تاريخ إصدار")
+    else:
+        sh.export_date = None     # نفس سلوك مسار التصدير الجماعي منذ البداية
 
 
 def _item_of(db: Session, item_name: str) -> Item | None:
@@ -261,7 +307,30 @@ def create_shipment(sh: Shipment, db: Session = Depends(get_session),
     resolve = cfg_resolver(db)
     sh.calc_version_id = resolve.current_id
     db.add(sh); db.commit(); db.refresh(sh)
-    return _enrich(db, sh, resolve)
+    _dedupe_ref_no(db, sh)
+    out = _enrich(db, sh, resolve)
+    # شراء نيابةً عن الزبون ← بدل تاجر مقترح في حساب مكتب الإرسال (ينتظر الاعتماد)
+    if (sh.goods_price or 0) > 0 and (sh.from_city or "").strip():
+        office = db.exec(select(MBox).where(MBox.name == sh.from_city.strip(),
+                                            MBox.box_type == BOX_OFFICE)).first()
+        out["merchant_pending"] = {"office": sh.from_city.strip(),
+                                   "amount": sh.goods_price,
+                                   "party_exists": office is not None}
+    return out
+
+
+def _dedupe_ref_no(db: Session, sh: Shipment):
+    """رقم القيد يُحسب من أكبر رقم موجود، فتسجيلان متزامنان (مسؤولا تجميع مثلاً)
+    قد يأخذان الرقم نفسه. بعد الحفظ: إن شاركتنا شحنة أقدم الرقمَ نأخذ رقماً جديداً.
+    الأقدم (المعرّف الأصغر) يحتفظ برقمه دائماً، فلا تتبدّل أرقام سبق عرضها."""
+    for _ in range(5):
+        dup = db.exec(select(Shipment).where(Shipment.ref_no == sh.ref_no,
+                                             Shipment.id < sh.id)).first()
+        if not dup:
+            return
+        last = db.exec(select(Shipment).order_by(Shipment.ref_no.desc())).first()
+        sh.ref_no = last.ref_no + 1
+        db.add(sh); db.commit(); db.refresh(sh)
 
 
 @router.post("/export")
@@ -276,6 +345,10 @@ def export_shipments(payload: dict, db: Session = Depends(get_session),
     ids = payload.get("ids") or []
     export_date = _as_date(payload.get("export_date"))
     status = payload.get("status", EXPORTED)
+    if status not in (EXPORTED, PENDING_EXPORT):
+        raise HTTPException(400, "حالة تصدير غير معروفة")
+    if status == EXPORTED and not export_date:
+        raise HTTPException(400, "حدّد تاريخ الإصدار")
     done = 0
     for sid in ids:
         sh = db.get(Shipment, sid)
@@ -376,7 +449,8 @@ def preview_customs(sid: int, patch: dict, db: Session = Depends(get_session),
         raise HTTPException(404, "الشحنة غير موجودة")
     patch = _apply_two_party(patch)
     allowed = (CUSTOMS_FIELDS - {"customs_computed"}) | {"two_party_auto"}
-    patch = {k: v for k, v in patch.items() if k in allowed}
+    patch = {k: (bool(v) if k == "two_party_auto" else _coerce(k, v))
+             for k, v in patch.items() if k in allowed}
     temp = sh.model_copy(update=patch)
     syr, irq, _ = _item_rates(db, temp.item_name)
     # المعاينة تعكس ما هو مُثبَّت على الشحنة (لا حالة الصنف الحالية)
@@ -393,9 +467,11 @@ def compute_customs(sid: int, patch: dict, db: Session = Depends(get_session),
     if not sh:
         raise HTTPException(404, "الشحنة غير موجودة")
     patch = _apply_two_party(patch)
-    for k in (CUSTOMS_FIELDS - {"customs_computed"}) | {"two_party_auto"}:
-        if k in patch:
-            setattr(sh, k, patch[k])
+    fields = (CUSTOMS_FIELDS - {"customs_computed"}) | {"two_party_auto"}
+    values = {k: (bool(patch[k]) if k == "two_party_auto" else _coerce(k, patch[k]))
+              for k in fields if k in patch}
+    for k, v in values.items():
+        setattr(sh, k, v)
     sh.customs_computed = True
     # ترك حقل الرسم فارغاً يعني «خذ رسم الصنف» — فيُثبَّت عليها الآن ولا يبقى معلّقاً
     _freeze_item_rates(db, sh)
@@ -409,7 +485,8 @@ def update_shipment(sid: int, patch: dict, db: Session = Depends(get_session),
     sh = db.get(Shipment, sid)
     if not sh:
         raise HTTPException(404, "الشحنة غير موجودة")
-    allowed = set(patch.keys())
+    # حقول النظام محجوبة عن كل الأدوار — تُضبط فقط من مساراتها المخصّصة
+    allowed = set(patch.keys()) - SYSTEM_FIELDS
     if user.role == ROLE_BRANCH:
         is_origin = sh.from_city == user.branch
         is_dest = sh.to_city == user.branch
@@ -430,15 +507,29 @@ def update_shipment(sid: int, patch: dict, db: Session = Depends(get_session),
         if sh.export_status == EXPORTED:
             raise HTTPException(403, "الشحنة مُصدَّرة — لا يمكن لمسؤول التجميع تعديلها")
         allowed -= CUSTOMS_FIELDS | EXPORT_FIELDS
-    # الحالتان اللتان تحدّدان مَن عليه الاستحقاق في حسابات محمود — نلتقطهما قبل التعديل
-    before = {"fees_payment": sh.fees_payment,
-              "collection_status": sh.collection_status}
+    # من ارتبط بمدينة لا ينقل شحنة خارجها: وإلا أفلتت من عزله وخرجت من يده
+    if user.role == ROLE_BRANCH or (user.role == ROLE_COLLECTOR and (user.branch or "").strip()):
+        allowed.discard("from_city")
+    # ما يحدّد استحقاقات حسابات محمود — نلتقطه قبل التعديل لنكشف ما صار مخالفاً
+    before = {"fees_payment": sh.fees_payment, "collection_status": sh.collection_status,
+              "export_date": sh.export_date}
+    # التحقق كله قبل أي تغيير على السجل: رفض حقل واحد لا يترك الشحنة نصف معدَّلة
+    values = {}
     for k in allowed:
-        if hasattr(sh, k):
-            val = patch[k]
-            if k in ("ship_date", "delivery_date", "export_date"):
-                val = _as_date(val)
-            setattr(sh, k, val)
+        if not hasattr(sh, k):
+            continue
+        val = patch[k]
+        if k in ("ship_date", "delivery_date", "export_date"):
+            val = _as_date(val)
+            if k == "ship_date" and val is None:
+                raise HTTPException(400, "تاريخ الشحنة مطلوب")
+        values[k] = _coerce(k, val)
+    for k, val in values.items():
+        setattr(sh, k, val)
+    # الاتساق يُفرض حين تتغيّر حقول التصدير فقط، فلا يُمنع تعديل هاتفٍ مثلاً
+    # على سجل قديم عالق في حالة غير متسقة
+    if values.keys() & EXPORT_FIELDS:
+        _normalize_export(sh)
     # لو أُنشئت الشحنة بجهة إرسال جديدة أبقِ حقل الفرع متسقاً معها
     if "from_city" in allowed:
         sh.branch = sh.from_city
@@ -451,8 +542,8 @@ def update_shipment(sid: int, patch: dict, db: Session = Depends(get_session),
         if "iraqi_per_ton" not in allowed:
             sh.iraqi_per_ton = None
         sh.tax_advance_rate = sh.consumption_rate = None   # نسب الصنف الجديد
-    if "goods_price" in allowed:
-        _sync_financing(sh)       # التمويل يتبع ثمن البضاعة دائماً
+    # التمويل مشتق من ثمن البضاعة دائماً — لا يُقبل ضبطه منفصلاً فيناقضه
+    _sync_financing(sh)
     # الشحنة تحمل رسومها دائماً — وإفراغ حقل يدوياً يُعيد تثبيت رسم الصنف الحالي
     _freeze_item_rates(db, sh)
     db.add(sh); db.commit(); db.refresh(sh)

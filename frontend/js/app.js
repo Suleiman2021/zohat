@@ -751,10 +751,16 @@ function shipForm(done, sh, prefill){
       // تبدّل المسؤولية يجعل استحقاقاً مسجَّلاً «مرفوضاً» — لا يُعدَّل تلقائياً،
       // بل يُنبَّه المستخدم ليعتمد المزامنة بنفسه من كشف الحساب
       const ch=(lastSaved&&lastSaved.mahmoud_changes)||[];
-      toast(ch.length
-        ? `تم الحفظ — ⚠ استحقاق بحاجة مزامنة في حسابات محمود: ${
-            ch.map(c=>`${c.party} (${money(c.booked)} ← ${money(c.computed)})`).join("، ")}`
-        : (isEdit?"تم حفظ التعديلات":"تم تسجيل الشحنة"));
+      let msg = ch.length
+        ? `تم الحفظ — ⚠ قيد بحاجة مزامنة في حسابات محمود: ${
+            ch.map(c=>`${c.kind?c.kind+" · ":""}${c.party} (${money(c.booked)} ← ${money(c.computed)})`).join("، ")}`
+        : (isEdit?"تم حفظ التعديلات":"تم تسجيل الشحنة");
+      // شراء نيابةً عن الزبون ← بدل تاجر مقترح بانتظار الاعتماد في حساب مكتب الإرسال
+      const mp=lastSaved&&lastSaved.merchant_pending;
+      if(mp) msg += mp.party_exists
+        ? ` — 🧾 بدل تاجر ${money(mp.amount)} بانتظار اعتمادك في حساب «${mp.office}»`
+        : ` — ⚠ لا توجد جهة «مكتب» باسم «${mp.office}» في حسابات محمود لاقتراح بدل التاجر`;
+      toast(msg);
       done();
     }catch(err){ toast(err.message, true); }
   });
@@ -1518,8 +1524,8 @@ async function renderJournal(box, filters){
 // ============ حسابات محمود — نظام محاسبي مستقل قائم على دفتر أستاذ ============
 // المبدأ: لا يُعدَّل رصيد يدوياً. الرصيد = الاستحقاقات − (الدفعات + المصاريف).
 const BOX_TYPES=["مكتب","زبون","مخلص سوري","مخلص عراقي","أخرى"];
-const TXN_CHARGE="استحقاق", TXN_PAYMENT="دفعة", TXN_EXPENSE="مصروف";
-const TXN_TYPES=[TXN_CHARGE,TXN_PAYMENT,TXN_EXPENSE];
+const TXN_CHARGE="استحقاق", TXN_PAYMENT="دفعة", TXN_EXPENSE="مصروف", TXN_MERCHANT="بدل تاجر";
+const TXN_TYPES=[TXN_CHARGE,TXN_PAYMENT,TXN_EXPENSE,TXN_MERCHANT];
 const CHARGE_REASONS=["شحنة","عمولة","إيراد","تسوية","أخرى"];
 // العملات: كل واحدة محاسبة مستقلة — لا تُجمع قيمها مع الأخرى في أي مكان
 const CUR_USD="دولار", CUR_EUR="يورو";
@@ -1530,9 +1536,21 @@ const cmoney=(v,c)=>(Number(v)||0).toLocaleString("en",{minimumFractionDigits:2}
   +" "+(CUR_SIGN[c]||c||"$");
 const txnBadge=t=>({[TXN_CHARGE]:'<span class="badge pend">استحقاق ▲</span>',
   [TXN_PAYMENT]:'<span class="badge done">دفعة ▼</span>',
-  [TXN_EXPENSE]:'<span class="badge info">مصروف ▼</span>'}[t]||t);
+  [TXN_EXPENSE]:'<span class="badge info">مصروف ▼</span>',
+  [TXN_MERCHANT]:'<span class="badge merchant">بدل تاجر ▼</span>'}[t]||t);
 // رصيد ملوّن: موجب = مستحق علينا تحصيله، سالب = رصيد دائن (للجهة عندنا)
 const bal=(v,c)=>`<b class="${v>0.01?'neg':(v<-0.01?'pos':'')}">${c?cmoney(v,c):money(v)}</b>`;
+// وضع الجهة بكلمات صريحة لكل عملة: هل هي مدينة لنا، أم لها علينا، أم مسدَّدة
+const position=(v,c)=> v>0.01
+  ? `<span class="pos-owe">مدينة لنا بـ <b>${cmoney(v,c)}</b></span>`
+  : (v<-0.01 ? `<span class="pos-credit">لها علينا <b>${cmoney(-v,c)}</b></span>`
+             : `<span class="pos-even">مسدَّدة</span>`);
+// كل عملة ذات حركة في سطر، وإلا «مسدَّدة» — تُستعمل في الجداول
+const positions=rows=>{
+  const on=(rows||[]).filter(r=>Math.abs(r.balance)>0.005);
+  return on.length ? on.map(r=>position(r.balance,r.currency)).join("<br>")
+                   : '<span class="pos-even">مسدَّدة</span>';
+};
 // صفوف العملات لجهة/فترة: يعرض العملات ذات الحركة فقط، وإلا شرطة
 const curCell=(rows,key)=>{
   const on=(rows||[]).filter(r=>Math.abs(r[key])>0.005);
@@ -1548,7 +1566,7 @@ async function vMahmoud(initialTab){
   const v=$("#view");
   v.innerHTML=`<h1>حسابات محمود</h1>
     <p class="hint">نظام محاسبي <b>مستقل ويدوي بالكامل</b>. الرصيد لا يُعدَّل يدوياً —
-      يُحسب دائماً: <b>الاستحقاقات − (الدفعات + المصاريف)</b>.
+      يُحسب دائماً: <b>الاستحقاقات − (الدفعات + المصاريف + بدل التاجر)</b>.
       كل عملية تُسجَّل في دفتر الأستاذ — يمكن إلغاؤها (يبقى أثرها للمراجعة)
       أو حذفها نهائياً من كشف الحساب.</p>
     <div class="card no-print"><div class="filters">
@@ -1559,7 +1577,8 @@ async function vMahmoud(initialTab){
     <div class="tabs" id="mtabs"></div>
     <div id="mtab"></div>`;
   const TABS=[["summary","الملخّص"],["parties","الجهات والأرصدة"],["entry","تسجيل عملية"],
-              ["revenues","إيرادات الشحنات"],["ledger","سجل العمليات"],["customs","مقارنة الجمارك"]];
+              ["revenues","إيرادات الشحنات"],["ledger","سجل العمليات"],["fx","سعر صرف الدينار"],
+              ["customs","مقارنة الجمارك"]];
   // فترة البحث والتبويب محفوظان: العودة من كشف حساب أو نموذج عملية لا تمسحهما
   const mst = viewState("mahmoud", {tab:"summary", f:{}});
   const saveMF = bindFilters(["mdf","mdt"], mst.f);
@@ -1583,6 +1602,7 @@ async function vMahmoud(initialTab){
       else if(cur==="entry")   await mEntryForm(box, body, go);
       else if(cur==="revenues")await mRevenues(box, period());
       else if(cur==="ledger")  await mLedger(box, period(), body);
+      else if(cur==="fx")      await mFxRate(box, body);
       else                     await mCustoms(box, body);
     }catch(err){ box.innerHTML=`<div class="card">${empty(err.message)}</div>`; }
   };
@@ -1600,22 +1620,25 @@ async function mSummary(box, period, go){
       <div class="kpi"><div class="label">إجمالي الاستحقاقات</div><div class="val">${cmoney(c.charges,c.currency)}</div></div>
       <div class="kpi cash"><div class="label">إجمالي الدفعات المستلمة</div><div class="val">${cmoney(c.payments,c.currency)}</div></div>
       <div class="kpi cash"><div class="label">إجمالي المصاريف</div><div class="val">${cmoney(c.expenses,c.currency)}</div></div>
+      <div class="kpi cash"><div class="label">إجمالي بدل التاجر</div><div class="val">${cmoney(c.merchant,c.currency)}</div></div>
       <div class="kpi"><div class="label">صافي المسدَّد</div><div class="val">${cmoney(c.settled,c.currency)}</div></div>
       <div class="kpi gold"><div class="label">الرصيد المتبقي</div><div class="val">${cmoney(c.balance,c.currency)}</div></div>
     </div></div>`).join("");
   const types=s.by_type.length ? wrapTable(`<table><thead><tr>
-      <th>النوع</th><th>العملة</th><th>استحقاقات</th><th>دفعات</th><th>مصاريف</th><th>المتبقي</th>
+      <th>النوع</th><th>العملة</th><th>استحقاقات</th><th>دفعات</th><th>مصاريف</th>
+      <th>بدل تاجر</th><th>المتبقي</th>
     </tr></thead><tbody>${s.by_type.map(t=>`<tr><td><b>${t.type}</b></td>
       <td class="nowrap">${t.currency}</td>
       <td>${cmoney(t.charges,t.currency)}</td><td>${cmoney(t.payments,t.currency)}</td>
-      <td>${cmoney(t.expenses,t.currency)}</td>
+      <td>${cmoney(t.expenses,t.currency)}</td><td>${cmoney(t.merchant,t.currency)}</td>
       <td>${bal(t.balance,t.currency)}</td></tr>`).join("")}</tbody></table>`) : empty("لا توجد بيانات");
   const reasons=s.by_reason.length ? wrapTable(`<table><thead><tr>
-      <th>السبب / البند</th><th>العملة</th><th>عدد</th><th>استحقاقات</th><th>دفعات</th><th>مصاريف</th>
+      <th>السبب / البند</th><th>العملة</th><th>عدد</th><th>استحقاقات</th><th>دفعات</th>
+      <th>مصاريف</th><th>بدل تاجر</th>
     </tr></thead><tbody>${s.by_reason.map(r=>`<tr><td>${r.reason}</td>
       <td class="nowrap">${r.currency}</td><td>${r.count}</td>
       <td>${cmoney(r.charges,r.currency)}</td><td>${cmoney(r.payments,r.currency)}</td>
-      <td>${cmoney(r.expenses,r.currency)}</td>
+      <td>${cmoney(r.expenses,r.currency)}</td><td>${cmoney(r.merchant,r.currency)}</td>
       </tr>`).join("")}</tbody></table>`) : empty("لا توجد حركات ضمن الفترة");
   const dues=s.outstanding.filter(o=>o.balance>0.01);
   const creds=s.outstanding.filter(o=>o.balance<-0.01);
@@ -1641,7 +1664,27 @@ async function mSummary(box, period, go){
           <td class="neg">${money(r.booked)}</td><td>${money(r.computed)}</td>
           <td><button class="sm primary" data-open="${r.party_id}">كشف الحساب</button></td>
         </tr>`).join("")}</tbody></table>`)}</div>` : "";
-  box.innerHTML=`${staleBox}<div class="card">${kpis}
+  // بدل التاجر: مقترحات من شحنات الشراء نيابةً عن الزبون تنتظر الاعتماد، والمرفوض بعد تعديلها
+  const mp=await API.get("/api/mahmoud/merchant/pending")
+    .catch(()=>({pending:[],stale:[],missing_offices:[],pending_amount:0}));
+  const merchantBox = (mp.pending.length || mp.stale.length) ? `<div class="card warn-card">
+      <h3>🧾 بدل تاجر بانتظار قرارك</h3>
+      ${mp.pending.length?`<p class="hint"><b>${mp.pending.length}</b> شحنة اشترت فيها الشركة البضاعة
+        نيابةً عن الزبون (${money(mp.pending_amount)}) — بانتظار اعتمادها كبدل تاجر في حساب مكتب الإرسال.</p>`:""}
+      ${mp.missing_offices.length?`<p class="hint neg">⚠ لا توجد جهة من نوع «مكتب» باسم:
+        <b>${mp.missing_offices.join("، ")}</b> — أضفها من «الجهات والأرصدة» لتظهر اقتراحاتها.</p>`:""}
+      ${mp.stale.length?`<p class="hint neg">⚠ <b>${mp.stale.length}</b> بدل تاجر معتمَد لم يعد يطابق شحنته
+        بعد تعديلها — افتح كشف حساب المكتب واضغط «مزامنة».</p>`:""}
+      ${wrapTable(`<table><thead><tr><th>القيد</th><th>التاريخ</th><th>مكتب الإرسال</th>
+        <th>المستلِم</th><th>المبلغ</th><th></th></tr></thead><tbody>${
+        mp.pending.slice(0,15).map(r=>`<tr><td>${r.ship_ref}</td>
+          <td class="nowrap">${r.ship_date}</td><td><b>${r.office}</b></td>
+          <td>${r.receiver||"—"}</td><td>${money(r.amount)}</td>
+          <td>${r.party_id?`<button class="sm primary" data-open="${r.party_id}">كشف الحساب</button>`
+                         :'<span class="mini neg">لا جهة</span>'}</td></tr>`).join("")}
+        </tbody></table>`)}
+      ${mp.pending.length>15?`<p class="hint">… و${mp.pending.length-15} أخرى.</p>`:""}</div>` : "";
+  box.innerHTML=`${staleBox}${merchantBox}<div class="card">${kpis}
       <p class="hint">${s.parties_count} جهة · ${s.txn_count} عملية ضمن الفترة<br>${totLine}</p></div>
     <div class="card"><h3>💰 جهات عليها مستحقات (بحاجة تحصيل)</h3>${list(dues,"neg")}</div>
     ${creds.length?`<div class="card"><h3>↩ جهات لها رصيد دائن</h3>${list(creds,"pos")}</div>`:""}
@@ -1664,31 +1707,49 @@ async function mParties(box, period, reload, go){
         <button class="primary">إضافة</button>
       </form>
       <p class="hint">الرصيد الافتتاحي يتحوّل إلى قيد شفّاف في دفتر الأستاذ — لا يُخزَّن كرقم يدوي.</p></div>
-    <div class="card"><h3>الجهات وأرصدتها</h3><div id="pl"></div></div>`;
+    <div class="card"><h3>الجهات وأرصدتها</h3>
+      <div class="filters no-print">
+        <label>بحث باسم الجهة<input id="psearch" placeholder="اكتب جزءاً من الاسم" autocomplete="off"></label>
+        <span class="mini" id="pcount"></span>
+      </div>
+      <div id="pl"></div></div>`;
 
-  const grouped={};
-  rows.forEach(r=>(grouped[r.box_type]=grouped[r.box_type]||[]).push(r));
-  $("#pl").innerHTML = rows.length ? Object.entries(grouped).map(([type,list])=>`
+  // البحث يطبّق التطابق على الاسم بعد توحيد صور الألف والتاء والياء (ادوية ≡ أدوية)
+  const norm=s=>(s||"").trim().replace(/[أإآٱ]/g,"ا").replace(/ة/g,"ه").replace(/ى/g,"ي");
+  const pst = viewState("mahmoud-parties", {q:""});
+  $("#psearch").value = pst.q;
+
+  const paint=()=>{
+    const q=norm($("#psearch").value);
+    pst.q=$("#psearch").value;
+    const shown = q ? rows.filter(r=>norm(r.name).includes(q)) : rows;
+    $("#pcount").textContent = q ? `${shown.length} من ${rows.length} جهة` : "";
+    const grouped={};
+    shown.forEach(r=>(grouped[r.box_type]=grouped[r.box_type]||[]).push(r));
+    $("#pl").innerHTML = !rows.length ? empty("لا توجد جهات — أضف جهة للبدء")
+    : (!shown.length ? empty("لا توجد جهة بهذا الاسم") : Object.entries(grouped).map(([type,list])=>`
       <h3 class="sub">${type} <span class="count-badge">${list.length}</span></h3>
       ${wrapTable(`<table><thead><tr>
-        <th>الجهة</th><th>المطلوب</th><th>المدفوع</th><th>المصاريف</th><th>المتبقي</th>
-        <th>آخر دفعة</th><th>تاريخها</th><th>عدد الدفعات</th><th>الحالة</th><th>إجراءات</th>
+        <th>الجهة</th><th>الوضع</th><th>المطلوب</th><th>المدفوع</th><th>المصاريف</th>
+        <th>بدل تاجر</th><th>آخر دفعة</th><th>تاريخها</th><th>عدد الدفعات</th><th>إجراءات</th>
       </tr></thead><tbody>${list.map(p=>`<tr data-row="${p.id}">
-        <td><b>${p.name}</b>${p.notes?`<div class="mini">${p.notes}</div>`:''}</td>
+        <td><b>${p.name}</b>${p.notes?`<div class="mini">${p.notes}</div>`:''}
+          ${p.is_active?'':'<div class="mini">موقوفة</div>'}</td>
+        <td class="nowrap">${positions(p.by_currency)}</td>
         <td>${curCell(p.by_currency,"charges")}</td>
         <td>${curCell(p.by_currency,"payments")}</td>
         <td>${curCell(p.by_currency,"expenses")}</td>
-        <td>${curBal(p.by_currency)}</td>
+        <td>${curCell(p.by_currency,"merchant")}</td>
         <td>${p.last_payment?cmoney(p.last_payment,p.last_payment_currency):"-"}</td>
         <td class="nowrap">${p.last_payment_date||"-"}</td>
         <td>${p.payments_count}</td>
-        <td>${p.is_settled?'<span class="badge done">مسدَّد</span>'
-             :(p.is_credit?'<span class="badge info">دائن</span>':'<span class="badge pend">مستحق</span>')}
-          ${p.is_active?'':'<div class="mini">موقوفة</div>'}</td>
         <td class="nowrap"><button class="sm primary" data-stmt="${p.id}">كشف الحساب</button>
           <button class="sm" data-edit="${p.id}">تعديل</button>
           <button class="sm danger" data-del="${p.id}">حذف</button></td>
-      </tr>`).join("")}</tbody></table>`)}`).join("") : empty("لا توجد جهات — أضف جهة للبدء");
+      </tr>`).join("")}</tbody></table>`)}`).join(""));
+    bindRows();
+  };
+  $("#psearch").addEventListener("input", paint);
 
   $("#pf").addEventListener("submit",async e=>{
     e.preventDefault();
@@ -1697,33 +1758,37 @@ async function mParties(box, period, reload, go){
     try{ await API.post("/api/mahmoud/parties",fd); toast("تمت إضافة الجهة"); reload(); }
     catch(err){ toast(err.message, true); }
   });
-  $("#pl").querySelectorAll("[data-stmt]").forEach(b=>b.onclick=()=>
-    mStatement(Number(b.dataset.stmt), "parties"));
-  $("#pl").querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{
-    if(!confirm("حذف هذه الجهة؟")) return;
-    try{ await API.del("/api/mahmoud/parties/"+b.dataset.del); toast("تم الحذف"); reload(); }
-    catch(err){ toast(err.message, true); }
-  });
-  $("#pl").querySelectorAll("[data-edit]").forEach(btn=>btn.onclick=()=>{
-    const p=rows.find(x=>String(x.id)===btn.dataset.edit); if(!p) return;
-    const tr=$("#pl").querySelector(`tr[data-row="${p.id}"]`);
-    tr.innerHTML=`<td><input class="cell-in" data-f="name" value="${escAttr(p.name)}"></td>
-      <td colspan="3"><select class="cell-in" data-f="box_type">${opts(BOX_TYPES,p.box_type)}</select></td>
-      <td colspan="4"><input class="cell-in" data-f="notes" value="${escAttr(p.notes)}" placeholder="ملاحظات"></td>
-      <td><select class="cell-in" data-f="is_active">
-        <option value="1" ${p.is_active?'selected':''}>نشطة</option>
-        <option value="0" ${!p.is_active?'selected':''}>موقوفة</option></select></td>
-      <td class="nowrap"><button class="sm primary" data-save>حفظ</button>
-        <button class="sm" data-cancel>إلغاء</button></td>`;
-    tr.querySelector("[data-cancel]").onclick=reload;
-    tr.querySelector("[data-save]").onclick=async()=>{
-      const patch={};
-      tr.querySelectorAll(".cell-in").forEach(i=>patch[i.dataset.f]=i.value);
-      patch.is_active = patch.is_active==="1";
-      try{ await API.put("/api/mahmoud/parties/"+p.id, patch); toast("تم التعديل"); reload(); }
+  // أزرار الصفوف تُربط بعد كل رسم — البحث يُعيد رسم الجدول
+  function bindRows(){
+    $("#pl").querySelectorAll("[data-stmt]").forEach(b=>b.onclick=()=>
+      mStatement(Number(b.dataset.stmt), "parties"));
+    $("#pl").querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{
+      if(!confirm("حذف هذه الجهة؟")) return;
+      try{ await API.del("/api/mahmoud/parties/"+b.dataset.del); toast("تم الحذف"); reload(); }
       catch(err){ toast(err.message, true); }
-    };
-  });
+    });
+    $("#pl").querySelectorAll("[data-edit]").forEach(btn=>btn.onclick=()=>{
+      const p=rows.find(x=>String(x.id)===btn.dataset.edit); if(!p) return;
+      const tr=$("#pl").querySelector(`tr[data-row="${p.id}"]`);
+      tr.innerHTML=`<td><input class="cell-in" data-f="name" value="${escAttr(p.name)}"></td>
+        <td colspan="3"><select class="cell-in" data-f="box_type">${opts(BOX_TYPES,p.box_type)}</select></td>
+        <td colspan="4"><input class="cell-in" data-f="notes" value="${escAttr(p.notes)}" placeholder="ملاحظات"></td>
+        <td><select class="cell-in" data-f="is_active">
+          <option value="1" ${p.is_active?'selected':''}>نشطة</option>
+          <option value="0" ${!p.is_active?'selected':''}>موقوفة</option></select></td>
+        <td class="nowrap"><button class="sm primary" data-save>حفظ</button>
+          <button class="sm" data-cancel>إلغاء</button></td>`;
+      tr.querySelector("[data-cancel]").onclick=reload;
+      tr.querySelector("[data-save]").onclick=async()=>{
+        const patch={};
+        tr.querySelectorAll(".cell-in").forEach(i=>patch[i.dataset.f]=i.value);
+        patch.is_active = patch.is_active==="1";
+        try{ await API.put("/api/mahmoud/parties/"+p.id, patch); toast("تم التعديل"); reload(); }
+        catch(err){ toast(err.message, true); }
+      };
+    });
+  }
+  paint();
 }
 
 // ------------------- كشف حساب جهة (نافذة كاملة) -------------------
@@ -1733,20 +1798,34 @@ async function mStatement(pid, fromTab){
   const d=await API.get(`/api/mahmoud/parties/${pid}/statement`);
   const p=d.party, t=d.totals;
   // بطاقات مستقلة لكل عملة — لا يُجمع دولار مع يورو أبداً
-  const curCards=(d.by_currency||[]).map(c=>`
+  // بطاقة الوضع الصريح: هل الجهة مدينة لنا، أم لها علينا — بالكلمات لا بالإشارة وحدها
+  const posCard=c=> c.balance>0.01
+    ? `<div class="kpi owe"><div class="label">الجهة مدينة لنا بـ</div>
+         <div class="val">${cmoney(c.balance,c.currency)}</div>
+         <div class="mini">مستحق علينا تحصيله منها</div></div>`
+    : (c.balance<-0.01
+      ? `<div class="kpi credit"><div class="label">للجهة علينا</div>
+           <div class="val">${cmoney(-c.balance,c.currency)}</div>
+           <div class="mini">رصيد دائن — دفعت أكثر مما عليها</div></div>`
+      : `<div class="kpi"><div class="label">الوضع</div><div class="val">مسدَّدة</div>
+           <div class="mini">لا لها ولا عليها</div></div>`);
+  const active=(d.by_currency||[]).filter(c=>
+    ["charges","payments","expenses","merchant"].some(k=>Math.abs(c[k]||0)>0.005)
+    || Math.abs(c.balance_all_time||0)>0.005);
+  const curCards=(active.length?active:(d.by_currency||[]).slice(0,1)).map(c=>`
     <div class="cur-block">
       <h3 class="sub">بال${c.currency}</h3>
       <div class="kpis">
+        ${posCard(c)}
         <div class="kpi"><div class="label">إجمالي المطلوب</div><div class="val">${cmoney(c.charges,c.currency)}</div></div>
         <div class="kpi cash"><div class="label">إجمالي المدفوع</div><div class="val">${cmoney(c.payments,c.currency)}</div></div>
         <div class="kpi cash"><div class="label">إجمالي المصاريف</div><div class="val">${cmoney(c.expenses,c.currency)}</div></div>
-        <div class="kpi gold"><div class="label">الرصيد المتبقي</div><div class="val">${cmoney(c.balance,c.currency)}</div></div>
+        <div class="kpi cash"><div class="label">إجمالي بدل التاجر</div><div class="val">${cmoney(c.merchant||0,c.currency)}</div></div>
         <div class="kpi"><div class="label">عدد الدفعات</div><div class="val">${c.payments_count}</div></div>
       </div>
-      <p class="hint">الرصيد = ${cmoney(c.charges,c.currency)} −
-        [${cmoney(c.payments,c.currency)} + ${cmoney(c.expenses,c.currency)}] =
-        <b>${cmoney(c.balance,c.currency)}</b>${c.balance<-0.01
-          ? ' — <span class="badge info">رصيد دائن للجهة</span>' : ""}</p>
+      <p class="hint">الرصيد = المطلوب ${cmoney(c.charges,c.currency)} −
+        [المدفوع ${cmoney(c.payments,c.currency)} + المصاريف ${cmoney(c.expenses,c.currency)}
+        + بدل التاجر ${cmoney(c.merchant||0,c.currency)}] = <b>${cmoney(c.balance,c.currency)}</b></p>
     </div>`).join("");
   v.innerHTML=`<h1>كشف حساب: ${p.name}</h1>
     <div class="card no-print"><div class="btn-row">
@@ -1761,6 +1840,9 @@ async function mStatement(pid, fromTab){
       <p class="hint">آخر دفعة: ${t.last_payment
         ? cmoney(t.last_payment, t.last_payment_currency)+(t.last_payment_date?` — ${t.last_payment_date}`:"")
         : "—"}</p></div>
+    ${p.box_type==="مكتب"?`<div class="card no-print">
+      <h3>🧾 بدل تاجر من الشحنات المُرسَلة من هذا المكتب</h3>
+      <div id="mc"><div class="loading"><div class="spinner"></div></div></div></div>`:""}
     ${["مكتب","زبون"].includes(p.box_type)?`<div class="card no-print">
       <h3>⚡ الاستحقاقات التلقائية من الشحنات الصادرة</h3>
       <div id="ac"><div class="loading"><div class="spinner"></div></div></div></div>`:""}
@@ -1789,7 +1871,7 @@ async function mStatement(pid, fromTab){
       <td>${r.id}</td><td class="nowrap">${txnBadge(r.txn_type)}</td>
       <td>${r.reason||"-"}</td><td>${r.description||"-"}</td>
       <td class="nowrap"><b>${r.currency||CUR_USD}</b></td>
-      <td><b>${r.signed_amount>0?"+":""}${cmoney(r.signed_amount, r.currency)}</b></td>
+      <td><b>${r.signed_amount>0?"+":""}${cmoney(r.signed_amount, r.currency)}</b>${iqdNote(r)}</td>
       <td>${r.is_void?"—":cmoney(r.balance_before, r.currency)}</td>
       <td>${r.is_void?"—":`<b>${cmoney(r.balance_after, r.currency)}</b>`}</td>
       <td class="mini">${r.created_by||"-"}</td>
@@ -1823,6 +1905,109 @@ async function mStatement(pid, fromTab){
   });
   if(["مكتب","زبون"].includes(p.box_type))
     loadAutoCharges(pid, ()=>mStatement(pid, fromTab));
+  if(p.box_type==="مكتب")
+    loadMerchant(pid, ()=>mStatement(pid, fromTab));
+}
+
+// سطر يوضّح أصل قيد أُدخل بالدينار: المبلغ الأصلي وسعر الصرف الذي حُوِّل به
+const iqdNote=r=> r.orig_currency==="دينار" && r.orig_amount
+  ? `<div class="mini">= ${Number(r.orig_amount).toLocaleString("en")} دينار
+       بسعر ${Number(r.fx_rate).toLocaleString("en")}</div>` : "";
+
+// --------- بدل تاجر مقترح من الشحنات (داخل كشف حساب المكتب) ---------
+// كل شحنة اشترت فيها الشركة البضاعة نيابةً عن الزبون ← ثمنها دفعه مكتب الإرسال للتاجر.
+async function loadMerchant(pid, refresh){
+  const box=$("#mc"); if(!box) return;
+  try{
+    const d=await API.get("/api/mahmoud/merchant",{party_id:pid});
+    if(!d.rows.length){
+      box.innerHTML=empty("لا توجد شحنات مُرسَلة من هذا المكتب فيها شراء نيابةً عن الزبون");
+      return;
+    }
+    box.innerHTML=`<p class="hint">حين تشتري الشركة البضاعة نيابةً عن الزبون يدفع
+        <b>مكتب الإرسال</b> ثمنها للتاجر، فيُقترح هنا «بدل تاجر» يُنقص رصيد المكتب.
+        <b>لا يُسجَّل شيء قبل اعتمادك</b>، والمبلغ يُحسب من الخادم (مقرَّباً لعدد صحيح).</p>
+      ${d.pending?`<div class="btn-row" style="margin-bottom:10px">
+        <button class="primary" id="mcAll">✓ اعتماد الكل (${d.pending})</button></div>`:""}
+      ${wrapTable(`<table><thead><tr><th>القيد</th><th>التاريخ</th><th>الصنف</th>
+        <th>المستلِم</th><th>ثمن البضاعة</th><th>الحالة</th><th></th></tr></thead><tbody>${
+        d.rows.map(r=>`<tr class="${r.stale?'warn-row':''}">
+          <td>${r.ship_ref}</td><td class="nowrap">${r.ship_date}</td>
+          <td>${r.item||"—"}</td><td>${r.receiver||"—"}</td>
+          <td><b>${money(r.amount)}</b>${r.stale
+            ? `<div class="mini neg">المعتمَد حالياً: ${money(r.booked_amount)}</div>
+               ${r.moved_to?`<div class="mini">انتقل إلى: ${r.moved_to}</div>`:""}` : ""}</td>
+          <td>${r.stale?'<span class="badge warn">مرفوض — بحاجة مزامنة</span>'
+               :(r.registered?'<span class="badge done">معتمَد</span>'
+                             :'<span class="badge pend">بانتظار الاعتماد</span>')}</td>
+          <td class="nowrap">${r.stale
+            ? `<button class="sm primary" data-msync="${r.shipment_id}">⟳ مزامنة</button>`
+            : (r.registered?"":`<button class="sm primary" data-mok="${r.shipment_id}">✓ اعتماد كبدل تاجر</button>`)}</td>
+        </tr>`).join("")}</tbody></table>`)}`;
+    const approve=async body=>{
+      try{
+        const r=await API.post("/api/mahmoud/merchant",{party_id:pid, ...body});
+        toast(`اعتُمد ${r.approved} بدل تاجر`); refresh();
+      }catch(err){ toast(err.message, true); }
+    };
+    box.querySelectorAll("[data-mok]").forEach(b=>b.onclick=()=>{
+      if(confirm("اعتماد هذه الشحنة كبدل تاجر في حساب المكتب؟"))
+        approve({shipment_id:Number(b.dataset.mok)});
+    });
+    if($("#mcAll")) $("#mcAll").onclick=()=>{
+      if(confirm(`اعتماد ${d.pending} بدل تاجر دفعةً واحدة؟`)) approve({all:true});
+    };
+    box.querySelectorAll("[data-msync]").forEach(b=>b.onclick=async()=>{
+      if(!confirm("مزامنة بدل التاجر مع الشحنة بعد تعديلها؟\n\n"+
+        "يُلغى القيد المخالف (يبقى أثره في الكشف) ويُسجَّل الصحيح في مكتب الإرسال الحالي.")) return;
+      try{
+        const r=await API.post("/api/mahmoud/merchant/resync",{shipment_id:Number(b.dataset.msync)});
+        toast(r.changed ? "تمت المزامنة — "+r.changes.map(c=>
+          `${c.party}: ${money(c.old_amount)} ← ${money(c.new_amount)}`).join("، ") : r.message);
+        refresh();
+      }catch(err){ toast(err.message, true); }
+    });
+  }catch(err){ box.innerHTML=empty(err.message); }
+}
+
+// ----------------------- سعر صرف الدينار -----------------------
+async function mFxRate(box, reload){
+  const d=await API.get("/api/mahmoud/fx-rate");
+  const cur=d.current;
+  box.innerHTML=`<div class="card"><h3>💱 سعر صرف الدينار العراقي مقابل الدولار</h3>
+      <div class="kpis" style="margin-bottom:14px">
+        <div class="kpi gold"><div class="label">السعر الساري</div>
+          <div class="val">${cur?`1 $ = ${Number(cur.iqd_per_usd).toLocaleString("en")} د.ع`:"غير مضبوط"}</div>
+          ${cur?`<div class="mini">ضبطه ${cur.set_by||"—"} — ${cur.set_at}</div>`:""}</div>
+      </div>
+      <form class="filters" id="fxf" novalidate>
+        <label>كم ديناراً = 1 دولار<input type="number" step="0.01" name="iqd_per_usd" id="fxv"
+          dir="ltr" placeholder="مثال 1450" value="${cur?cur.iqd_per_usd:""}"></label>
+        <label>ملاحظة <span class="opt">(اختياري)</span><input name="notes" placeholder="مثال: سعر السوق اليوم"></label>
+        <button class="primary">تثبيت السعر</button>
+      </form>
+      <p class="hint">يُستعمل عند تسجيل عملية بالدينار: يُحوَّل المبلغ إلى دولار بهذا السعر.
+        <b>تغيير السعر لا يمسّ العمليات المسجَّلة سابقاً</b> — كل عملية تحفظ السعر الذي حُوِّلت به.</p>
+      <div id="fxPreview" class="hint"></div></div>
+    <div class="card"><h3>سجل الأسعار</h3>${d.history.length ? wrapTable(`<table><thead><tr>
+        <th>السعر (دينار لكل دولار)</th><th>التاريخ والوقت</th><th>بواسطة</th><th>ملاحظة</th>
+      </tr></thead><tbody>${d.history.map((h,i)=>`<tr>
+        <td><b>${Number(h.iqd_per_usd).toLocaleString("en")}</b>${i===0?' <span class="badge done">ساري</span>':""}</td>
+        <td class="nowrap">${h.set_at}</td><td>${h.set_by||"—"}</td><td>${h.notes||"—"}</td>
+      </tr>`).join("")}</tbody></table>`) : empty("لم يُضبط أي سعر بعد")}</div>`;
+  const preview=()=>{
+    const r=Number($("#fxv").value);
+    $("#fxPreview").innerHTML = r>0
+      ? `مثال: 100,000 دينار = <b>${money(100000/r)}</b> · و1,000,000 دينار = <b>${money(1000000/r)}</b>` : "";
+  };
+  $("#fxv").addEventListener("input", preview); preview();
+  $("#fxf").addEventListener("submit", async e=>{
+    e.preventDefault();
+    const fd=Object.fromEntries(new FormData(e.target));
+    if(!(Number(fd.iqd_per_usd)>0)){ toast("أدخل سعر صرف أكبر من صفر", true); return; }
+    try{ await API.post("/api/mahmoud/fx-rate", fd); toast("ثُبِّت سعر الصرف الجديد"); reload(); }
+    catch(err){ toast(err.message, true); }
+  });
 }
 
 // --------- الاستحقاقات التلقائية من الشحنات الصادرة (داخل كشف الحساب) ---------
@@ -1954,6 +2139,11 @@ async function mTxnDialog(pid, pname, done, existing){
   const isEdit=!!existing;
   const v=$("#view");
   const parties = pid ? null : await API.get("/api/mahmoud/parties");
+  // سعر الصرف الساري — للمعاينة فقط؛ التحويل الفعلي يتم على الخادم
+  const fx = await API.get("/api/mahmoud/fx-rate").then(r=>r.current).catch(()=>null);
+  const wasIqd = !!(existing && existing.orig_currency==="دينار");
+  // القيد المُدخَل بالدينار يُعاد تحويله بسعره الأصلي عند تعديله
+  const rateFor = () => (wasIqd && existing.fx_rate) ? existing.fx_rate : (fx && fx.iqd_per_usd);
   // novalidate: نتحقّق بأنفسنا برسائل عربية واضحة بدل نوافذ المتصفح.
   // المبلغ وحده إلزامي — وبقية الحقول اختيارية تماماً.
   v.innerHTML=`<h1>${isEdit?`تعديل العملية رقم ${existing.id}`:"تسجيل عملية"}</h1>
@@ -1966,11 +2156,19 @@ async function mTxnDialog(pid, pname, done, existing){
         ${opts(TXN_TYPES, existing?existing.txn_type:TXN_CHARGE)}</select></label>
       <label>التاريخ<input type="date" name="txn_date" id="td"
         value="${existing?existing.txn_date:today()}"></label>
-      <label>العملة<select name="currency" id="cu">
+      <label>طريقة إدخال المبلغ<select id="mode">
+          <option value="direct" ${wasIqd?"":"selected"}>مباشرة بالعملة</option>
+          <option value="iqd" ${wasIqd?"selected":""}>بالدينار العراقي (يُحوَّل إلى دولار)</option>
+        </select></label>
+      <label id="curWrap">العملة<select name="currency" id="cu">
         ${opts(CURRENCIES, existing?(existing.currency||CUR_USD):CUR_USD)}</select>
         <small class="hint">كل عملة حساب مستقل — لا تُجمع مع الأخرى</small></label>
-      <label>المبلغ <span class="req">*</span><input type="number" step="0.01" name="amount" id="am"
+      <label id="amWrap">المبلغ <span class="req">*</span><input type="number" step="0.01" name="amount" id="am"
         value="${existing?existing.amount:""}" autofocus></label>
+      <label id="iqdWrap" hidden>المبلغ بالدينار <span class="req">*</span>
+        <input type="number" step="1" id="iqd" dir="ltr"
+          value="${wasIqd?existing.orig_amount:""}" placeholder="مثال 250000">
+        <small class="hint" id="iqdOut"></small></label>
       <label id="reasonWrap">السبب / البند <span class="opt">(اختياري)</span>
         <input name="reason" list="mreasons" value="${existing?escAttr(existing.reason):""}"
           placeholder="شحنة / عمولة / إيراد / تسوية..."></label>
@@ -1992,22 +2190,48 @@ async function mTxnDialog(pid, pname, done, existing){
 
   const effect=()=>{
     const t=$("#tt").value;
-    $("#effect").innerHTML = t===TXN_CHARGE
-      ? "▲ <b>استحقاق</b>: يزيد المبلغ المطلوب من هذه الجهة (شحنة، عمولة، إيراد، تسوية...)."
-      : (t===TXN_PAYMENT
-        ? "▼ <b>دفعة</b>: نقد استلمه المحاسب من الجهة — يُنقص المستحق عليها."
-        : "▼ <b>مصروف</b>: أنفقته الجهة نيابةً عن الشركة — يُعامَل كسداد غير نقدي فيُنقص المستحق.");
+    $("#effect").innerHTML = ({
+      [TXN_CHARGE]:  "▲ <b>استحقاق</b>: يزيد المبلغ المطلوب من هذه الجهة (شحنة، عمولة، إيراد، تسوية...).",
+      [TXN_PAYMENT]: "▼ <b>دفعة</b>: نقد استلمه المحاسب من الجهة — يُنقص المستحق عليها.",
+      [TXN_EXPENSE]: "▼ <b>مصروف</b>: أنفقته الجهة نيابةً عن الشركة — يُعامَل كسداد غير نقدي فيُنقص المستحق.",
+      [TXN_MERCHANT]:"▼ <b>بدل تاجر</b>: ثمن بضاعة دفعته الجهة للتاجر نيابةً عن الزبون — يُنقص المستحق عليها.",
+    })[t] || "";
     $("#reasonWrap").querySelector("input").placeholder =
-      t===TXN_CHARGE ? "شحنة / عمولة / إيراد / تسوية..." : "بند المصروف أو ملاحظة الدفعة";
+      t===TXN_CHARGE ? "شحنة / عمولة / إيراد / تسوية..."
+      : (t===TXN_MERCHANT ? "اسم التاجر أو الصنف" : "بند المصروف أو ملاحظة الدفعة");
   };
+  // إدخال بالدينار: يُخفى حقل الدولار ويُعرض التحويل الحيّ بسعر الصرف
+  const syncMode=()=>{
+    const iqd=$("#mode").value==="iqd";
+    $("#iqdWrap").hidden=!iqd; $("#amWrap").hidden=iqd; $("#curWrap").hidden=iqd;
+    if(iqd && !rateFor())
+      $("#iqdOut").innerHTML='<span class="neg">لم يُضبط سعر الصرف — اضبطه من تبويب «سعر صرف الدينار»</span>';
+    else previewIqd();
+  };
+  const previewIqd=()=>{
+    const rate=rateFor(), n=Number($("#iqd").value);
+    if(!rate) return;
+    $("#iqdOut").innerHTML = n>0
+      ? `= <b>${money(n/rate)}</b> بسعر ${Number(rate).toLocaleString("en")} دينار للدولار`
+        + (wasIqd?" (سعر العملية الأصلي)":"")
+      : `بسعر ${Number(rate).toLocaleString("en")} دينار للدولار`;
+  };
+  $("#mode").onchange=syncMode; $("#iqd").addEventListener("input", previewIqd); syncMode();
   $("#tt").onchange=effect; effect();
   $("#cancel").onclick=done;
   $("#tf").addEventListener("submit",async e=>{
     e.preventDefault();
     const fd=Object.fromEntries(new FormData(e.target));
-    fd.amount=Number(fd.amount||0);
-    if(!(fd.amount>0)){                       // التحقق الوحيد الإلزامي
-      toast("أدخل المبلغ (أكبر من صفر)", true); $("#am").focus(); return;
+    if($("#mode").value==="iqd"){
+      const n=Number($("#iqd").value);
+      if(!(n>0)){ toast("أدخل المبلغ بالدينار (أكبر من صفر)", true); $("#iqd").focus(); return; }
+      if(!rateFor()){ toast("اضبط سعر صرف الدينار أولاً", true); return; }
+      fd.iqd_amount=n; delete fd.amount; delete fd.currency;
+    }else{
+      fd.amount=Number(fd.amount||0);
+      if(!(fd.amount>0)){                     // التحقق الوحيد الإلزامي
+        toast("أدخل المبلغ (أكبر من صفر)", true); $("#am").focus(); return;
+      }
     }
     if(!fd.txn_date) fd.txn_date=today();     // التاريخ يُملأ تلقائياً إن تُرك فارغاً
     const btn=e.target.querySelector('button[type="submit"]');
@@ -2018,7 +2242,9 @@ async function mTxnDialog(pid, pname, done, existing){
         fd.party_id = pid || Number(fd.party_id);
         fd.txn_type = $("#tt").value;
         const r=await API.post("/api/mahmoud/txn", fd);
-        toast(`تم التسجيل — رصيد ${fd.currency}: ${cmoney(r.party_balance, fd.currency)}`);
+        toast(`تم التسجيل${r.orig_currency==="دينار"
+          ? ` (${Number(r.orig_amount).toLocaleString("en")} دينار ← ${money(r.amount)})` : ""}`
+          + ` — رصيد ${r.currency}: ${cmoney(r.party_balance, r.currency)}`);
       }
       done();                                 // العودة للواجهة السابقة
     }catch(err){ toast(err.message, true); btn.disabled=false; }
@@ -2086,7 +2312,7 @@ async function mLedger(box, period, reload){
         <td>${r.id}</td><td class="nowrap">${txnBadge(r.txn_type)}</td>
         <td><b>${r.party_name}</b></td><td>${r.reason||"-"}</td>
         <td class="nowrap"><b>${r.currency||CUR_USD}</b></td>
-        <td><b>${r.signed_amount>0?"+":""}${cmoney(r.signed_amount,r.currency)}</b></td>
+        <td><b>${r.signed_amount>0?"+":""}${cmoney(r.signed_amount,r.currency)}</b>${iqdNote(r)}</td>
         <td>${r.is_void?"—":cmoney(r.balance_before,r.currency)}</td>
         <td>${r.is_void?"—":cmoney(r.balance_after,r.currency)}</td>
         <td class="mini">${r.created_by||"-"}</td>

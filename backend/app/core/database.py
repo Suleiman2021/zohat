@@ -62,6 +62,9 @@ _MIGRATIONS = {
     ],
     "mtxn": [
         ("currency", "TEXT DEFAULT 'دولار'"),
+        ("orig_amount", "FLOAT"),
+        ("orig_currency", "TEXT DEFAULT ''"),
+        ("fx_rate", "FLOAT"),
     ],
     "mentry": [
         ("migrated", "INTEGER DEFAULT 0"),

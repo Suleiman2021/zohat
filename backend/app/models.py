@@ -205,11 +205,17 @@ class MEntry(SQLModel, table=True):
 
 
 # ---- دفتر الأستاذ: المصدر الوحيد للأرصدة (لا يُعدَّل رصيد يدوياً إطلاقاً) ----
-# الرصيد المستحق = إجمالي الاستحقاقات − (إجمالي الدفعات + إجمالي المصاريف)
+# الرصيد المستحق = الاستحقاقات − (الدفعات + المصاريف + بدل التاجر)
 TXN_CHARGE = "استحقاق"    # يزيد الرصيد المستحق على الجهة
 TXN_PAYMENT = "دفعة"      # يُنقصه (نقد استلمه المحاسب)
 TXN_EXPENSE = "مصروف"     # يُنقصه (أنفقته الجهة نيابةً عن الشركة)
-TXN_TYPES = (TXN_CHARGE, TXN_PAYMENT, TXN_EXPENSE)
+# يُنقصه: ثمن بضاعة دفعه مكتب الإرسال للتاجر نيابةً عن الزبون. مستقل عن «مصروف»
+# كي يُتتبَّع وحده — فمجموعه يطابق مشتريات الشركة نيابةً عن الزبائن.
+TXN_MERCHANT = "بدل تاجر"
+TXN_TYPES = (TXN_CHARGE, TXN_PAYMENT, TXN_EXPENSE, TXN_MERCHANT)
+
+# سعر صرف الدينار العراقي: كم ديناراً مقابل دولار واحد
+CUR_IQD = "دينار"
 
 # أسباب الاستحقاق (مرنة — يمكن للمحاسب كتابة سبب آخر)
 CHARGE_REASONS = ("شحنة", "عمولة", "إيراد", "تسوية", "أخرى")
@@ -247,9 +253,25 @@ class MTxn(SQLModel, table=True):
     edited_by: str = ""
     edited_at: Optional[datetime] = None
 
+    # إدخال بعملة غير عملة القيد (الدينار) — يُحفظ الأصل وسعر الصرف المستعمل،
+    # فتغيير سعر الصرف لاحقاً لا يمسّ هذا القيد، ويبقى التحويل قابلاً للتدقيق
+    orig_amount: Optional[float] = None
+    orig_currency: str = ""
+    fx_rate: Optional[float] = None
+
     @field_validator("txn_date", mode="before")
     @classmethod
     def _v_date(cls, v): return _as_date(v)
+
+
+class MFxRate(SQLModel, table=True):
+    """سجل أسعار صرف الدينار مقابل الدولار — الساري هو الأحدث.
+    يُحفظ كل تغيير (من غيّره ومتى) بدل الكتابة فوق قيمة واحدة."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    iqd_per_usd: float                         # كم ديناراً = 1 دولار
+    notes: str = ""
+    set_by: str = ""
+    set_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class MTxnAudit(SQLModel, table=True):

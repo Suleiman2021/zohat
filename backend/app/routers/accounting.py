@@ -178,8 +178,14 @@ def edit_journal(jid: int, patch: dict, db: Session = Depends(get_session),
     if not e:
         raise HTTPException(404, "القيد غير موجود")
     for k, v in patch.items():
-        if hasattr(e, k):
-            setattr(e, k, _as_date(v) if k == "entry_date" else v)
+        if k == "id" or not hasattr(e, k):      # المعرّف لا يُعدَّل
+            continue
+        if k == "amount":
+            try:
+                v = float(v or 0)
+            except (TypeError, ValueError):
+                raise HTTPException(400, "المبلغ غير صحيح")
+        setattr(e, k, _as_date(v) if k == "entry_date" else v)
     db.add(e); db.commit(); db.refresh(e)
     return e
 

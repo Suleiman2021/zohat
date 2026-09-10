@@ -106,6 +106,16 @@ tr.warn-row td{background:#fffaf0}
 .muted{color:var(--muted)}
 .mini.gold-t{color:#8a6d0b;font-weight:700}
 
+/* بدل تاجر: لون مستقل عن المصروف كي يُميَّز في الكشوف */
+.badge.merchant{background:#efe9fb;color:#5b3fa3}
+/* وضع الجهة بالكلمات: مدينة لنا / لها علينا / مسدَّدة */
+.pos-owe{color:var(--warn)}
+.pos-credit{color:var(--ok)}
+.pos-even{color:var(--muted)}
+.kpi.owe{border-color:#f0b8b0;background:#fdf3f1}
+.kpi.owe .val{color:var(--warn)}
+.kpi.credit{border-color:#b7dfbc;background:#f1faf2}
+.kpi.credit .val{color:var(--ok)}
 /* كتلة عملة مستقلة — تفصل بصرياً حسابات الدولار عن اليورو */
 .cur-block{border-inline-start:3px solid var(--teal);padding-inline-start:10px;margin-bottom:14px}
 .cur-block .sub{margin:0 0 8px}
