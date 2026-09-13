@@ -570,6 +570,76 @@ def summary(db: Session = Depends(get_session), user: User = Depends(admin_or_ac
     }
 
 
+_AGING = (("0–30 يوماً", 30), ("31–60 يوماً", 60), ("61–90 يوماً", 90), ("أكثر من 90 يوماً", None))
+
+
+@router.get("/debts")
+def debts_report(db: Session = Depends(get_session), user: User = Depends(admin_or_accountant),
+                 as_of: Optional[str] = None):
+    """تقرير الديون حتى تاريخ: الجهات المدينة لنا والجهات التي لها علينا، لكل عملة على حدة.
+
+    الرصيد تراكمي منذ أول قيد حتى as_of (لا يُقصّ من بداية فترة — فالدَّين تراكمي).
+    «أيام منذ آخر سداد» = من آخر دفعة/مصروف/بدل تاجر، أو من أول استحقاق إن لم يُسدَّد شيء."""
+    try:
+        as_of_date = _as_date(as_of) if as_of else date.today()
+    except ValueError:
+        raise HTTPException(400, "تاريخ التقرير غير صحيح")
+    parties = {p.id: p for p in db.exec(select(MBox)).all()}
+    per: dict[tuple, list] = {}
+    for t in _live(db, date_to=str(as_of_date)):
+        per.setdefault((t.party_id, _cur(t)), []).append(t)
+
+    owed_to_us, owed_by_us = [], []
+    for (pid, cur), lst in per.items():
+        p = parties.get(pid)
+        if not p:
+            continue
+        tot = _totals(lst)
+        if abs(tot["balance"]) <= 0.01:
+            continue
+        ordered = _order(lst)
+        settles = [t for t in ordered if SIGN.get(t.txn_type, 0) < 0]
+        charges = [t for t in ordered if SIGN.get(t.txn_type, 0) > 0]
+        last_settle = settles[-1] if settles else None
+        ref = (last_settle.txn_date if last_settle
+               else (charges[0].txn_date if charges else ordered[0].txn_date))
+        days = max((as_of_date - ref).days, 0)
+        bucket = next(lbl for lbl, lim in _AGING if lim is None or days <= lim)
+        row = {"party_id": pid, "name": p.name, "type": p.box_type, "is_active": p.is_active,
+               "currency": cur, "balance": tot["balance"], "amount": round(abs(tot["balance"]), 2),
+               "charges": tot["charges"], "settled": tot["settled"],
+               "txn_count": len(lst),
+               "last_settle_date": str(last_settle.txn_date) if last_settle else "",
+               "last_settle_amount": round(last_settle.amount, 2) if last_settle else 0.0,
+               "last_activity": str(ordered[-1].txn_date),
+               "days_since_settle": days, "aging": bucket}
+        (owed_to_us if tot["balance"] > 0 else owed_by_us).append(row)
+
+    owed_to_us.sort(key=lambda r: -r["amount"])
+    owed_by_us.sort(key=lambda r: -r["amount"])
+    totals = []
+    for cur in list(CURRENCIES) + sorted({r["currency"] for r in owed_to_us + owed_by_us}
+                                        - set(CURRENCIES)):
+        rec = [r for r in owed_to_us if r["currency"] == cur]
+        pay = [r for r in owed_by_us if r["currency"] == cur]
+        if not rec and not pay:
+            continue
+        rec_total = round(sum(r["amount"] for r in rec), 2)
+        pay_total = round(sum(r["amount"] for r in pay), 2)
+        totals.append({"currency": cur, "receivable": rec_total, "payable": pay_total,
+                       "net": round(rec_total - pay_total, 2),
+                       "debtors": len(rec), "creditors": len(pay),
+                       "aging": [{"bucket": lbl,
+                                  "amount": round(sum(r["amount"] for r in rec
+                                                      if r["aging"] == lbl), 2),
+                                  "count": sum(1 for r in rec if r["aging"] == lbl)}
+                                 for lbl, _ in _AGING]})
+    return {"as_of": str(as_of_date),
+            "generated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
+            "owed_to_us": owed_to_us, "owed_by_us": owed_by_us, "totals": totals,
+            "aging_buckets": [lbl for lbl, _ in _AGING]}
+
+
 @router.get("/meta")
 def meta(user: User = Depends(admin_or_accountant)):
     """ثوابت النظام للواجهة."""

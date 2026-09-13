@@ -1576,7 +1576,8 @@ async function vMahmoud(initialTab){
     </div></div>
     <div class="tabs" id="mtabs"></div>
     <div id="mtab"></div>`;
-  const TABS=[["summary","الملخّص"],["parties","الجهات والأرصدة"],["entry","تسجيل عملية"],
+  const TABS=[["summary","الملخّص"],["parties","الجهات والأرصدة"],["debts","تقرير الديون"],
+              ["entry","تسجيل عملية"],
               ["revenues","إيرادات الشحنات"],["ledger","سجل العمليات"],["fx","سعر صرف الدينار"],
               ["customs","مقارنة الجمارك"]];
   // فترة البحث والتبويب محفوظان: العودة من كشف حساب أو نموذج عملية لا تمسحهما
@@ -1603,6 +1604,7 @@ async function vMahmoud(initialTab){
       else if(cur==="revenues")await mRevenues(box, period());
       else if(cur==="ledger")  await mLedger(box, period(), body);
       else if(cur==="fx")      await mFxRate(box, body);
+      else if(cur==="debts")   await mDebts(box, period());
       else                     await mCustoms(box, body);
     }catch(err){ box.innerHTML=`<div class="card">${empty(err.message)}</div>`; }
   };
@@ -1968,6 +1970,119 @@ async function loadMerchant(pid, refresh){
       }catch(err){ toast(err.message, true); }
     });
   }catch(err){ box.innerHTML=empty(err.message); }
+}
+
+// ----------------------- تقرير الديون -----------------------
+// مَن عليه لنا ومَن له علينا حتى تاريخ، لكل عملة على حدة، مع التقادم — قابل للطباعة PDF
+async function mDebts(box, period){
+  const d=await API.get("/api/mahmoud/debts",{as_of:period.date_to});
+  const st=viewState("mahmoud-debts",{type:"",cur:"",q:""});
+  const nrm=s=>(s||"").trim().replace(/[أإآٱ]/g,"ا").replace(/ة/g,"ه").replace(/ى/g,"ي");
+  box.innerHTML=`<div class="card no-print"><div class="filters">
+      <label>نوع الجهة<select id="dbt">${optsWithAll(BOX_TYPES, st.type)}</select></label>
+      <label>العملة<select id="dbc">${optsWithAll(CURRENCIES, st.cur)}</select></label>
+      <label>بحث باسم الجهة<input id="dbq" value="${escAttr(st.q)}" placeholder="جزء من الاسم" autocomplete="off"></label>
+      <button class="sm" id="dbpr">🖨 طباعة / PDF</button>
+      <button class="sm" id="dbxl">⬇ تصدير Excel</button>
+    </div>
+    <p class="hint">الأرصدة <b>تراكمية حتى ${d.as_of}</b> (حقل «إلى تاريخ» أعلى الصفحة؛ فارغ = حتى اليوم).
+      «من تاريخ» لا يُستعمل هنا لأن الدَّين يُبنى من أول قيد. العملات لا تُجمع مع بعضها.
+      للحفظ PDF: اضغط «طباعة» ثم اختر «حفظ كـ PDF» وجهةً للطابعة.</p></div>
+    <div class="only-print">${brandHead()}
+      <h2 class="print-title">تقرير الديون — حتى ${d.as_of}</h2></div>
+    <div id="dbout"></div>`;
+
+  let shown={rec:[],pay:[]};
+  const paint=()=>{
+    st.type=$("#dbt").value; st.cur=$("#dbc").value; st.q=$("#dbq").value;
+    const q=nrm(st.q);
+    const keep=r=>(!st.type||r.type===st.type)&&(!st.cur||r.currency===st.cur)
+                  &&(!q||nrm(r.name).includes(q));
+    const rec=d.owed_to_us.filter(keep), pay=d.owed_by_us.filter(keep);
+    shown={rec,pay};
+    const curs=[...new Set([...rec,...pay].map(r=>r.currency))];
+    if(!curs.length){ $("#dbout").innerHTML=`<div class="card">${empty(
+      d.owed_to_us.length||d.owed_by_us.length ? "لا توجد جهات مطابقة للفلاتر"
+        : "لا توجد ديون — كل الجهات مسدَّدة")}</div>`; return; }
+    const sumOf=(arr,c)=>arr.filter(r=>r.currency===c).reduce((a,r)=>a+r.amount,0);
+
+    // ملخّص لكل عملة: لنا، علينا، الصافي
+    const kpis=curs.map(c=>{
+      const R=sumOf(rec,c), P=sumOf(pay,c), N=R-P;
+      return `<div class="cur-block"><h3 class="sub">بال${c}</h3><div class="kpis">
+        <div class="kpi owe"><div class="label">مجموع ما لنا على الجهات</div>
+          <div class="val">${cmoney(R,c)}</div>
+          <div class="mini">${rec.filter(r=>r.currency===c).length} جهة مدينة</div></div>
+        <div class="kpi credit"><div class="label">مجموع ما علينا للجهات</div>
+          <div class="val">${cmoney(P,c)}</div>
+          <div class="mini">${pay.filter(r=>r.currency===c).length} جهة دائنة</div></div>
+        <div class="kpi gold"><div class="label">الصافي</div>
+          <div class="val">${cmoney(Math.abs(N),c)}</div>
+          <div class="mini">${N>0.01?"لصالحنا":(N<-0.01?"علينا":"متعادل")}</div></div>
+      </div></div>`;}).join("");
+
+    // تقادم الديون المستحقة لنا (حسب أيام منذ آخر سداد)
+    const aging=rec.length ? `<div class="card"><h3>تقادم الديون المستحقة لنا</h3>
+      <p class="hint">مصنّفة بعدد الأيام منذ آخر سداد (أو منذ أول استحقاق إن لم تُسدِّد الجهة شيئاً).</p>
+      ${wrapTable(`<table><thead><tr><th>الفئة</th>${curs.filter(c=>rec.some(r=>r.currency===c))
+        .map(c=>`<th>العدد (${c})</th><th>المبلغ (${c})</th>`).join("")}</tr></thead><tbody>${
+        d.aging_buckets.map(b=>`<tr><td><b>${b}</b></td>${curs.filter(c=>rec.some(r=>r.currency===c))
+          .map(c=>{const g=rec.filter(r=>r.currency===c&&r.aging===b);
+            return `<td>${g.length}</td><td>${cmoney(g.reduce((a,r)=>a+r.amount,0),c)}</td>`;}).join("")}</tr>`
+        ).join("")}</tbody></table>`)}</div>` : "";
+
+    // جدول لكل جهة مع سطر مجموع لكل عملة
+    const table=(arr, kind)=>{
+      if(!arr.length) return empty(kind==="rec"?"لا توجد جهات مدينة لنا":"لا توجد جهات لها علينا");
+      const byCur=curs.filter(c=>arr.some(r=>r.currency===c));
+      return wrapTable(`<table class="compact-print"><thead><tr>
+          <th>#</th><th>الجهة</th><th>النوع</th><th>العملة</th>
+          <th>${kind==="rec"?"المستحق لنا":"المستحق علينا"}</th>
+          <th>النسبة من المجموع</th><th>إجمالي المطلوب</th><th>إجمالي المسدَّد</th>
+          <th>آخر سداد</th><th>أيام منذ آخر سداد</th><th>آخر حركة</th><th class="no-print"></th>
+        </tr></thead><tbody>${byCur.map(c=>{
+          const g=arr.filter(r=>r.currency===c), total=g.reduce((a,r)=>a+r.amount,0);
+          return g.map((r,i)=>`<tr>
+            <td>${i+1}</td><td><b>${r.name}</b>${r.is_active?"":' <span class="mini">(موقوفة)</span>'}</td>
+            <td>${r.type}</td><td class="nowrap">${r.currency}</td>
+            <td class="${kind==="rec"?"neg":"pos"}"><b>${cmoney(r.amount,c)}</b></td>
+            <td>${total?(r.amount/total*100).toFixed(1)+"%":"—"}</td>
+            <td>${cmoney(r.charges,c)}</td><td>${cmoney(r.settled,c)}</td>
+            <td class="nowrap">${r.last_settle_date
+              ? `${r.last_settle_date}<div class="mini">${cmoney(r.last_settle_amount,c)}</div>` : "لا يوجد"}</td>
+            <td class="${r.days_since_settle>90?"neg":""}">${r.days_since_settle}</td>
+            <td class="nowrap">${r.last_activity}</td>
+            <td class="no-print"><button class="sm" data-open="${r.party_id}">كشف الحساب</button></td>
+          </tr>`).join("") + `<tr class="total-row">
+            <td colspan="4"><b>المجموع بال${c} (${g.length} جهة)</b></td>
+            <td><b>${cmoney(total,c)}</b></td><td>100%</td>
+            <td>${cmoney(g.reduce((a,r)=>a+r.charges,0),c)}</td>
+            <td>${cmoney(g.reduce((a,r)=>a+r.settled,0),c)}</td>
+            <td colspan="3"></td><td class="no-print"></td></tr>`;
+        }).join("")}</tbody></table>`);
+    };
+
+    $("#dbout").innerHTML=`<div class="card">${kpis}</div>
+      <div class="card"><h3>💰 جهات مدينة لنا (عليها ديون)</h3>${table(rec,"rec")}</div>
+      <div class="card"><h3>↩ جهات لها علينا (رصيد دائن)</h3>${table(pay,"pay")}</div>
+      ${aging}
+      <p class="report-foot">أُعدّ التقرير في ${d.generated_at} (UTC) — الأرصدة حتى ${d.as_of}.</p>`;
+    $("#dbout").querySelectorAll("[data-open]").forEach(b=>b.onclick=()=>
+      mStatement(Number(b.dataset.open), "debts"));
+  };
+  liveFilters(["dbt","dbc","dbq"], paint, 150);
+  $("#dbpr").onclick=()=>printDoc("landscape");
+  $("#dbxl").onclick=()=>exportXlsx([
+      ["position","الوضع",r=>r.balance>0?"مدينة لنا":"لها علينا"],
+      ["name","الجهة",r=>r.name],["type","النوع",r=>r.type],["currency","العملة",r=>r.currency],
+      ["amount","المبلغ",r=>r.amount],["charges","إجمالي المطلوب",r=>r.charges],
+      ["settled","إجمالي المسدَّد",r=>r.settled],
+      ["last_settle_date","آخر سداد",r=>r.last_settle_date||"لا يوجد"],
+      ["last_settle_amount","مبلغ آخر سداد",r=>r.last_settle_amount],
+      ["days_since_settle","أيام منذ آخر سداد",r=>r.days_since_settle],
+      ["aging","فئة التقادم",r=>r.aging],["last_activity","آخر حركة",r=>r.last_activity],
+    ], [...shown.rec, ...shown.pay], "mdebts", `تقرير الديون حتى ${d.as_of}`);
+  paint();
 }
 
 // ----------------------- سعر صرف الدينار -----------------------
