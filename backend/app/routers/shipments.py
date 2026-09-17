@@ -200,6 +200,7 @@ def _enrich(db, sh: Shipment, resolve=None) -> dict:
 @router.get("")
 def list_shipments(db: Session = Depends(get_session), user: User = Depends(any_role),
                    date_from: Optional[str] = None, date_to: Optional[str] = None,
+                   export_from: Optional[str] = None, export_to: Optional[str] = None,
                    to_city: Optional[str] = None, from_city: Optional[str] = None,
                    sender: Optional[str] = None, receiver: Optional[str] = None,
                    item: Optional[str] = None, ref: Optional[str] = None,
@@ -214,6 +215,12 @@ def list_shipments(db: Session = Depends(get_session), user: User = Depends(any_
     q = _visible(user, q)
     if date_from: q = q.where(Shipment.ship_date >= date_from)
     if date_to: q = q.where(Shipment.ship_date <= date_to)
+    # مدى تاريخ التصدير — مستقل عن مدى تاريخ الشحنة، وهو أساس تبويب «إيرادات
+    # الشحنات»؛ يُتيح مطابقة اللوحتين. شحنة بلا تاريخ تصدير خارج هذا المدى حُكماً.
+    if export_from:
+        q = q.where(Shipment.export_date != None, Shipment.export_date >= export_from)  # noqa: E711
+    if export_to:
+        q = q.where(Shipment.export_date != None, Shipment.export_date <= export_to)    # noqa: E711
     if to_city: q = q.where(Shipment.to_city == to_city)
     if from_city: q = q.where(Shipment.from_city == from_city)
     if sender: q = q.where(Shipment.sender_name.contains(sender))

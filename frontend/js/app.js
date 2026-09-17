@@ -1224,8 +1224,10 @@ function detailPanels(rows){
 async function vReports(){
   const v=$("#view"); v.innerHTML=`<h1>لوحة التقارير</h1>
    <div class="card no-print"><div class="filters">
-     <label>من تاريخ<input type="date" id="rdf"></label>
-     <label>إلى تاريخ<input type="date" id="rdt"></label>
+     <label>من تاريخ الشحنة<input type="date" id="rdf"></label>
+     <label>إلى تاريخ الشحنة<input type="date" id="rdt"></label>
+     <label>من تاريخ التصدير<input type="date" id="rxf"></label>
+     <label>إلى تاريخ التصدير<input type="date" id="rxt"></label>
      <label>جهة الإرسال<select id="rfc">${optsWithAll(CITIES)}</select></label>
      <label>جهة الاستلام<select id="rtc">${optsWithAll(CITIES)}</select></label>
      <label>صاحب الشحنة (المستلِم)<input id="rsnd" placeholder="اسم جزئي"></label>
@@ -1279,7 +1281,8 @@ async function vReports(){
   };
 
   const filters=()=>({
-    date_from:$("#rdf").value, date_to:$("#rdt").value, from_city:$("#rfc").value,
+    date_from:$("#rdf").value, date_to:$("#rdt").value,
+    export_from:$("#rxf").value, export_to:$("#rxt").value, from_city:$("#rfc").value,
     to_city:$("#rtc").value, receiver:$("#rsnd").value, sender:$("#rsfrom").value,
     item:$("#ritem").value, ref:$("#rref").value, driver:$("#rdrv").value,
     financing:$("#rfin").value, fees_payment:$("#rfp").value,
@@ -1354,7 +1357,13 @@ async function vReports(){
     if(folderMode) params.export_status=EXPORTED;   // المجلدات للشحنات الصادرة
     const rows=await API.get("/api/shipments", params);
     if(!folderMode){
-      $("#rdrill").innerHTML=""; $("#rmode").textContent="";
+      $("#rdrill").innerHTML="";
+      // مدى تاريخ التصدير يستبعد ما لم يُصدَّر بعد — تنبيه كي لا يُظنّ الفرق نقصاً
+      $("#rmode").innerHTML = (params.export_from||params.export_to)
+        ? "📦 <b>مرشَّح بتاريخ التصدير</b> — الشحنات <b>المصدَّرة</b> ضمن المدى فقط، "
+          + "وما زال <b>«قيد التصدير»</b> خارج النتيجة (لا تاريخ تصدير له). "
+          + "بهذا الفلتر تطابق أرقامُ اللوحة تبويبَ «إيرادات الشحنات» في حسابات محمود."
+        : "";
       paint(rows); return;
     }
     // وضع المجلدات: الفلاتر تُطبَّق قبل التجميع، فتعرض المجلدات المطابق فقط
@@ -1365,7 +1374,7 @@ async function vReports(){
       "لا توجد شحنات صادرة مطابقة للفلاتر");
   };
 
-  const FIDS=["rdf","rdt","rfc","rtc","rsnd","rsfrom","ritem","rref","rdrv",
+  const FIDS=["rdf","rdt","rxf","rxt","rfc","rtc","rsnd","rsfrom","ritem","rref","rdrv",
               "rfin","rfp","rcs","rds","rcol","ralpha"];
   const saveRF = bindFilters(FIDS, rst.f);      // استعادة الفلاتر المحفوظة
   // الفلترة فورية — وتبقى داخل المجلد المفتوح بدل القفز لمستوى السنوات
