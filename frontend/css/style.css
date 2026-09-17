@@ -64,6 +64,9 @@ h1{font-size:22px;margin:0 0 16px;color:var(--navy)}
   padding:16px;margin-bottom:16px;box-shadow:var(--shadow)}
 .card h3{margin:0 0 12px;font-size:16px;color:var(--navy)}
 .hint{color:var(--muted);font-size:12px;margin:6px 0 0}
+/* سطر «الأساس»: يوضّح بأيّ تاريخ وأيّ حالة رُشِّحت أرقام التبويب، كي لا تُقارَن بغير أساسها */
+.hint.basis{background:#f4f7fb;border:1px solid var(--line);border-right:3px solid var(--navy);
+  border-radius:8px;padding:8px 10px;color:#3c4a5a;line-height:1.7}
 .warn-card{border-color:#f3d27a;background:#fffbea}
 
 /* ---------- مؤشرات KPI ---------- */
