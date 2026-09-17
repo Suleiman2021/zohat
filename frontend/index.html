@@ -1,51 +1,51 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#183C60">
-<title>زوهات — نظام الشحن والتخليص</title>
+<title>ط²ظˆظ‡ط§طھ â€” ظ†ط¸ط§ظ… ط§ظ„ط´ط­ظ† ظˆط§ظ„طھط®ظ„ظٹطµ</title>
 <link rel="manifest" href="manifest.json">
-<!-- ?v=63 يكسر أي كاش قديم لدى المتصفحات التي علِقت على نسخة سابقة -->
-<link rel="stylesheet" href="css/style.css?v=63">
+<!-- ?v=64 ظٹظƒط³ط± ط£ظٹ ظƒط§ط´ ظ‚ط¯ظٹظ… ظ„ط¯ظ‰ ط§ظ„ظ…طھطµظپط­ط§طھ ط§ظ„طھظٹ ط¹ظ„ظگظ‚طھ ط¹ظ„ظ‰ ظ†ط³ط®ط© ط³ط§ط¨ظ‚ط© -->
+<link rel="stylesheet" href="css/style.css?v=64">
 </head>
 <body>
-<!-- شاشة الدخول -->
+<!-- ط´ط§ط´ط© ط§ظ„ط¯ط®ظˆظ„ -->
 <div id="login" class="login-screen">
   <form id="loginForm" class="login-card">
-    <img src="icons/logo.svg" class="logo-login" alt="زوهات — ZOHAT Customs Clearance">
-    <h2>تسجيل الدخول</h2>
-    <input name="username" placeholder="اسم المستخدم" required autocomplete="username">
-    <input name="password" type="password" placeholder="كلمة المرور" required autocomplete="current-password">
-    <button type="submit">دخول</button>
+    <img src="icons/logo.svg" class="logo-login" alt="ط²ظˆظ‡ط§طھ â€” ZOHAT Customs Clearance">
+    <h2>طھط³ط¬ظٹظ„ ط§ظ„ط¯ط®ظˆظ„</h2>
+    <input name="username" placeholder="ط§ط³ظ… ط§ظ„ظ…ط³طھط®ط¯ظ…" required autocomplete="username">
+    <input name="password" type="password" placeholder="ظƒظ„ظ…ط© ط§ظ„ظ…ط±ظˆط±" required autocomplete="current-password">
+    <button type="submit">ط¯ط®ظˆظ„</button>
     <p id="loginErr" class="err"></p>
   </form>
 </div>
 
-<!-- التطبيق -->
+<!-- ط§ظ„طھط·ط¨ظٹظ‚ -->
 <div id="app" class="app hidden">
   <aside class="sidebar">
     <div class="side-head">
-      <img src="icons/logo-white.svg" class="logo-side" alt="زوهات">
-      <button id="navToggle" class="nav-toggle" aria-label="فتح القائمة">☰</button>
+      <img src="icons/logo-white.svg" class="logo-side" alt="ط²ظˆظ‡ط§طھ">
+      <button id="navToggle" class="nav-toggle" aria-label="ظپطھط­ ط§ظ„ظ‚ط§ط¦ظ…ط©">âک°</button>
     </div>
     <nav id="nav"></nav>
     <div class="userbox">
       <div id="userName"></div><div id="userRole" class="role"></div>
-      <button id="logout">خروج</button>
+      <button id="logout">ط®ط±ظˆط¬</button>
     </div>
   </aside>
   <main id="view" class="view"></main>
 </div>
 
-<!-- إشعارات مؤقتة (toast) -->
+<!-- ط¥ط´ط¹ط§ط±ط§طھ ظ…ط¤ظ‚طھط© (toast) -->
 <div id="toasts" aria-live="polite"></div>
 
-<!-- شبكة أمان: أي خطأ برمجي يوقف تحميل الملفات كان يترك الشاشة صامتة تماماً
-     (لا يُربط حتى زر الدخول). هذا يُظهره بوضوح بدل الصمت. -->
+<!-- ط´ط¨ظƒط© ط£ظ…ط§ظ†: ط£ظٹ ط®ط·ط£ ط¨ط±ظ…ط¬ظٹ ظٹظˆظ‚ظپ طھط­ظ…ظٹظ„ ط§ظ„ظ…ظ„ظپط§طھ ظƒط§ظ† ظٹطھط±ظƒ ط§ظ„ط´ط§ط´ط© طµط§ظ…طھط© طھظ…ط§ظ…ط§ظ‹
+     (ظ„ط§ ظٹظڈط±ط¨ط· ط­طھظ‰ ط²ط± ط§ظ„ط¯ط®ظˆظ„). ظ‡ط°ط§ ظٹظڈط¸ظ‡ط±ظ‡ ط¨ظˆط¶ظˆط­ ط¨ط¯ظ„ ط§ظ„طµظ…طھ. -->
 <script>
 window.addEventListener("error", e=>{
-  const m = e.message || "خطأ غير معروف";
+  const m = e.message || "ط®ط·ط£ ط؛ظٹط± ظ…ط¹ط±ظˆظپ";
   let box = document.getElementById("fatalErr");
   if(!box){
     box = document.createElement("div");
@@ -55,11 +55,11 @@ window.addEventListener("error", e=>{
       + "box-shadow:0 4px 14px rgba(0,0,0,.35)";
     document.body && document.body.appendChild(box);
   }
-  if(box) box.textContent = "⚠ تعذّر تحميل التطبيق: " + m + " — حدّث الصفحة، وإن تكرّر أبلغ الدعم بهذه الرسالة.";
+  if(box) box.textContent = "âڑ  طھط¹ط°ظ‘ط± طھط­ظ…ظٹظ„ ط§ظ„طھط·ط¨ظٹظ‚: " + m + " â€” ط­ط¯ظ‘ط« ط§ظ„طµظپط­ط©طŒ ظˆط¥ظ† طھظƒط±ظ‘ط± ط£ط¨ظ„ط؛ ط§ظ„ط¯ط¹ظ… ط¨ظ‡ط°ظ‡ ط§ظ„ط±ط³ط§ظ„ط©.";
 });
 </script>
-<script src="js/api.js?v=63"></script>
-<script src="js/app.js?v=63"></script>
+<script src="js/api.js?v=64"></script>
+<script src="js/app.js?v=64"></script>
 <script>
 if ('serviceWorker' in navigator)
   navigator.serviceWorker.register('sw.js').catch(()=>{});

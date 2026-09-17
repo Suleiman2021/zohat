@@ -2200,53 +2200,101 @@ async function loadAutoCharges(pid, refresh){
 // ------------- إيرادات الشحنات الصادرة (الإجمالي − حمزة − ماجد) -------------
 async function mRevenues(box, period){
   const d=await API.get("/api/mahmoud/export-revenues", period);
-  const t=d.totals;
-  box.innerHTML=`<div class="card"><h3>إيرادات الشحنات الصادرة</h3>
-    <p class="hint">لكل شحنة صادرة (بتاريخ تصديرها): <b>الإجمالي</b> = أجور الشحن والجمركة +
-      ثمن البضاعة والعمولة — يُجلب تلقائياً من النظام الأساسي.
-      و<b>الإيراد</b> = الإجمالي − مصرف حمزة − مصرف ماجد (حقلان يدويان).</p>
-    <div class="kpis" style="margin-bottom:12px">
-      <div class="kpi"><div class="label">إجمالي الشحنات الصادرة</div><div class="val">${money(t.total)}</div></div>
-      <div class="kpi cash"><div class="label">مجموع مصرف حمزة</div><div class="val">${money(t.hamza)}</div></div>
-      <div class="kpi cash"><div class="label">مجموع مصرف ماجد</div><div class="val">${money(t.majed)}</div></div>
-      <div class="kpi gold"><div class="label">صافي الإيراد</div><div class="val">${money(t.revenue)}</div></div>
-    </div><div id="rv"></div></div>`;
-  if(!d.rows.length){
-    $("#rv").innerHTML=empty("لا توجد شحنات صادرة ضمن الفترة المحددة"); return;
-  }
-  $("#rv").innerHTML=wrapTable(`<table><thead><tr>
-      <th>تاريخ الشحنة الصادرة</th><th>عدد الشحنات</th><th>أجور الشحن والجمركة</th>
-      <th>ثمن البضاعة + العمولة</th><th>الإجمالي</th>
-      <th>مصرف حمزة</th><th>مصرف ماجد</th><th>الإيراد</th><th></th></tr></thead>
-    <tbody>${d.rows.map(r=>`<tr data-d="${r.export_date}">
-      <td class="nowrap"><b>${r.export_date}</b></td><td>${r.count}</td>
-      <td>${money(r.fees_total)}</td><td>${money(r.goods_with_comm)}</td>
-      <td><b>${money(r.total)}</b></td>
-      <td><input class="cell-in" type="number" step="0.01" min="0" data-h
-        value="${r.hamza_expense||""}" placeholder="0"></td>
-      <td><input class="cell-in" type="number" step="0.01" min="0" data-m
-        value="${r.majed_expense||""}" placeholder="0"></td>
-      <td data-rev><b class="${r.revenue<0?'neg':''}">${money(r.revenue)}</b></td>
-      <td><button class="sm primary" data-save>حفظ</button></td>
-    </tr>`).join("")}</tbody></table>`);
-  $("#rv").querySelectorAll("tr[data-d]").forEach(tr=>{
-    const r=d.rows.find(x=>x.export_date===tr.dataset.d); if(!r) return;
-    const h=tr.querySelector("[data-h]"), m=tr.querySelector("[data-m]");
-    // الإيراد يتحدّث فوراً أثناء الكتابة قبل الحفظ
-    const upd=()=>{
-      const rev=r.total-(Number(h.value)||0)-(Number(m.value)||0);
-      tr.querySelector("[data-rev]").innerHTML=`<b class="${rev<0?'neg':''}">${money(rev)}</b>`;
-    };
-    h.oninput=upd; m.oninput=upd;
-    tr.querySelector("[data-save]").onclick=async()=>{
-      try{
-        await API.put("/api/mahmoud/export-revenues/"+r.export_date,
-          {hamza_expense:Number(h.value)||0, majed_expense:Number(m.value)||0});
-        r.hamza_expense=Number(h.value)||0; r.majed_expense=Number(m.value)||0;
-        toast(`تم حفظ مصرفي شحنة ${r.export_date}`);
-      }catch(err){ toast(err.message, true); }
-    };
-  });
+  const open=new Set();                      // التواريخ المفتوحة تفاصيلُها
+  // المجاميع تُحسب من الصفوف في كل رسم، فتبقى البطاقات مطابقة بعد كل حفظ
+  const sums=()=>d.rows.reduce((a,r)=>({
+    total:a.total+r.total, hamza:a.hamza+(r.hamza_expense||0),
+    majed:a.majed+(r.majed_expense||0),
+    revenue:a.revenue+(r.total-(r.hamza_expense||0)-(r.majed_expense||0)),
+    ships:a.ships+r.count}), {total:0,hamza:0,majed:0,revenue:0,ships:0});
+
+  const render=()=>{
+    const t=sums(), orphans=d.rows.filter(r=>r.orphan);
+    box.innerHTML=`<div class="card"><h3>إيرادات الشحنات الصادرة</h3>
+      <p class="hint">لكل تاريخ تصدير: <b>الإجمالي</b> = أجور الشحن والجمركة +
+        ثمن البضاعة والعمولة لكل شحنات ذلك اليوم — يُجلب تلقائياً من النظام الأساسي.
+        و<b>الإيراد</b> = الإجمالي − مصرف حمزة − مصرف ماجد (حقلان يدويان).
+        القيم مقرَّبة لأعداد صحيحة (كل شحنة تُقرَّب ثم تُجمع) كبقية تبويبات حسابات محمود.
+        اضغط <b>«تفاصيل»</b> لرؤية شحنات اليوم واحدةً واحدة.</p>
+      <div class="kpis" style="margin-bottom:12px">
+        <div class="kpi"><div class="label">إجمالي الشحنات الصادرة</div>
+          <div class="val">${money(t.total)}</div><div class="mini">${t.ships} شحنة</div></div>
+        <div class="kpi cash"><div class="label">مجموع مصرف حمزة</div><div class="val">${money(t.hamza)}</div></div>
+        <div class="kpi cash"><div class="label">مجموع مصرف ماجد</div><div class="val">${money(t.majed)}</div></div>
+        <div class="kpi gold"><div class="label">صافي الإيراد</div><div class="val">${money(t.revenue)}</div></div>
+      </div>
+      ${orphans.length?`<p class="hint neg">⚠ ${orphans.length} تاريخ فيه مصاريف محفوظة بلا أي شحنة
+        (نُقلت شحناته إلى تاريخ آخر أو حُذفت). كانت تختفي من التقرير فيظهر الإيراد أكبر مما هو —
+        صارت تظهر معلَّمة أدناه. صفّر مصروفيها واحفظ لإزالتها، أو أعد الشحنات إلى تاريخها.</p>`:""}
+      <div id="rv"></div></div>`;
+
+    if(!d.rows.length){
+      $("#rv").innerHTML=empty("لا توجد شحنات صادرة ضمن الفترة المحددة"); return;
+    }
+    $("#rv").innerHTML=wrapTable(`<table><thead><tr>
+        <th>تاريخ الشحنة الصادرة</th><th>عدد الشحنات</th><th>أجور الشحن والجمركة</th>
+        <th>ثمن البضاعة + العمولة</th><th>الإجمالي</th>
+        <th>مصرف حمزة</th><th>مصرف ماجد</th><th>الإيراد</th><th></th></tr></thead>
+      <tbody>${d.rows.map(r=>{
+        const rev=r.total-(r.hamza_expense||0)-(r.majed_expense||0);
+        return `<tr data-d="${r.export_date}" class="${r.orphan?'warn-row':''}">
+        <td class="nowrap"><b>${r.export_date}</b>
+          ${r.orphan?'<div class="mini neg">لا شحنات بهذا التاريخ</div>':''}</td>
+        <td>${r.count}</td>
+        <td>${money(r.fees_total)}</td><td>${money(r.goods_with_comm)}</td>
+        <td><b>${money(r.total)}</b></td>
+        <td><input class="cell-in" type="number" step="0.01" min="0" data-h
+          value="${r.hamza_expense||""}" placeholder="0"></td>
+        <td><input class="cell-in" type="number" step="0.01" min="0" data-m
+          value="${r.majed_expense||""}" placeholder="0"></td>
+        <td data-rev><b class="${rev<0?'neg':''}">${money(rev)}</b></td>
+        <td class="nowrap"><button class="sm primary" data-save>حفظ</button>
+          ${r.count?`<button class="sm" data-det>${open.has(r.export_date)?"إخفاء":"تفاصيل"}</button>`:""}</td>
+      </tr>
+      ${open.has(r.export_date)?`<tr class="detail-row"><td colspan="9">
+        ${wrapTable(`<table><thead><tr><th>القيد</th><th>تاريخ الشحنة</th><th>الصنف</th>
+          <th>المرسِل</th><th>المستلِم</th><th>من→إلى</th>
+          <th>أجور الشحن والجمركة</th><th>ثمن البضاعة + العمولة</th><th>الإجمالي</th>
+        </tr></thead><tbody>${r.items.map(x=>`<tr>
+          <td>${x.ref_no}</td><td class="nowrap">${x.ship_date}</td><td>${x.item||"—"}</td>
+          <td>${x.sender||"—"}</td><td>${x.receiver||"—"}</td>
+          <td class="nowrap">${x.from_city} ← ${x.to_city}</td>
+          <td>${money(x.fees_total)}</td><td>${money(x.goods_with_comm)}</td>
+          <td><b>${money(x.total)}</b></td></tr>`).join("")}
+          <tr class="total-row"><td colspan="6"><b>مجموع ${r.count} شحنة</b></td>
+            <td><b>${money(r.fees_total)}</b></td><td><b>${money(r.goods_with_comm)}</b></td>
+            <td><b>${money(r.total)}</b></td></tr>
+        </tbody></table>`)}</td></tr>`:""}`;}).join("")}</tbody></table>`);
+
+    $("#rv").querySelectorAll("tr[data-d]").forEach(tr=>{
+      const r=d.rows.find(x=>x.export_date===tr.dataset.d); if(!r) return;
+      const h=tr.querySelector("[data-h]"), m=tr.querySelector("[data-m]");
+      // الإيراد يتحدّث فوراً أثناء الكتابة قبل الحفظ
+      const upd=()=>{
+        const rev=r.total-(Number(h.value)||0)-(Number(m.value)||0);
+        tr.querySelector("[data-rev]").innerHTML=`<b class="${rev<0?'neg':''}">${money(rev)}</b>`;
+      };
+      h.oninput=upd; m.oninput=upd;
+      const det=tr.querySelector("[data-det]");
+      if(det) det.onclick=()=>{
+        open.has(r.export_date) ? open.delete(r.export_date) : open.add(r.export_date);
+        render();
+      };
+      tr.querySelector("[data-save]").onclick=async()=>{
+        try{
+          await API.put("/api/mahmoud/export-revenues/"+r.export_date,
+            {hamza_expense:Number(h.value)||0, majed_expense:Number(m.value)||0});
+          r.hamza_expense=Number(h.value)||0; r.majed_expense=Number(m.value)||0;
+          // تاريخ بلا شحنات صُفِّرت مصاريفه ← لم يعد له داعٍ في التقرير
+          if(r.orphan && !r.hamza_expense && !r.majed_expense)
+            d.rows=d.rows.filter(x=>x!==r);
+          toast(`تم حفظ مصرفي ${r.export_date}`);
+          render();                      // يُعيد حساب البطاقات فتبقى مطابقة
+        }catch(err){ toast(err.message, true); }
+      };
+    });
+  };
+  render();
 }
 
 // --------------- نافذة تسجيل/تعديل عملية (حوار) ---------------

@@ -1186,29 +1186,53 @@ def export_revenues(db: Session = Depends(get_session), user: User = Depends(adm
         if date_from and k < date_from: continue
         if date_to and k > date_to: continue
         d = by_date.setdefault(k, {"export_date": k, "count": 0,
-                                   "fees_total": 0.0, "goods_with_comm": 0.0})
+                                   "fees_total": 0, "goods_with_comm": 0, "items": []})
+        # كل شحنة تُقرَّب لعدد صحيح ثم تُجمع — نفس تقريب الاستحقاقات وبدل التاجر،
+        # فتتطابق أرقام تبويبات حسابات محمود بدل أن تختلف بالكسور
+        fees, goods = _rint(c.get("fees_total", 0.0)), _rint(gwc)
         d["count"] += 1
-        d["fees_total"] += c.get("fees_total", 0.0)
-        d["goods_with_comm"] += gwc
+        d["fees_total"] += fees
+        d["goods_with_comm"] += goods
+        d["items"].append({"ref_no": s.ref_no, "ship_date": str(s.ship_date),
+                           "item": s.item_name or "", "receiver": s.receiver_name or "",
+                           "sender": s.sender_name or "",
+                           "from_city": s.from_city or "", "to_city": s.to_city or "",
+                           "fees_total": fees, "goods_with_comm": goods,
+                           "total": fees + goods})
+
     saved = {str(r.export_date): r for r in db.exec(select(MExportRevenue)).all()}
+    # تاريخ فيه مصاريف محفوظة بلا شحنات (نُقلت أو حُذفت) كان يختفي من التقرير
+    # فتضيع مصاريفه من المجموع ويظهر الإيراد أكبر مما هو — يظهر الآن معلَّماً
+    for k, r in saved.items():
+        if k in by_date:
+            continue
+        if date_from and k < date_from: continue
+        if date_to and k > date_to: continue
+        if not (r.hamza_expense or r.majed_expense):
+            continue
+        by_date[k] = {"export_date": k, "count": 0, "fees_total": 0,
+                      "goods_with_comm": 0, "items": []}
+
     out = []
     for k in sorted(by_date, reverse=True):
         d = by_date[k]
         r = saved.get(k)
         hamza = round(r.hamza_expense, 2) if r else 0.0
         majed = round(r.majed_expense, 2) if r else 0.0
-        total = round(d["fees_total"] + d["goods_with_comm"], 2)
-        out.append({**d, "fees_total": round(d["fees_total"], 2),
-                    "goods_with_comm": round(d["goods_with_comm"], 2),
-                    "total": total, "hamza_expense": hamza, "majed_expense": majed,
+        total = d["fees_total"] + d["goods_with_comm"]
+        d["items"].sort(key=lambda x: x["ref_no"])
+        out.append({**d, "total": total, "hamza_expense": hamza, "majed_expense": majed,
                     "notes": r.notes if r else "",
                     "revenue": round(total - hamza - majed, 2),
-                    "saved": r is not None})
+                    "saved": r is not None,
+                    "orphan": d["count"] == 0})
     return {"rows": out,
             "totals": {"total": round(sum(x["total"] for x in out), 2),
                        "hamza": round(sum(x["hamza_expense"] for x in out), 2),
                        "majed": round(sum(x["majed_expense"] for x in out), 2),
-                       "revenue": round(sum(x["revenue"] for x in out), 2)}}
+                       "revenue": round(sum(x["revenue"] for x in out), 2),
+                       "shipments": sum(x["count"] for x in out),
+                       "orphans": sum(1 for x in out if x["orphan"])}}
 
 
 @router.put("/export-revenues/{export_date}")
