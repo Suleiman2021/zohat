@@ -76,6 +76,8 @@ h1{font-size:22px;margin:0 0 16px;color:var(--navy)}
 .kpi .label{font-size:12px;color:var(--muted);font-weight:600}
 .kpi .val{font-size:21px;font-weight:800;color:var(--navy);margin-top:4px;word-break:break-word}
 .kpi.cash .val{color:var(--ok)} .kpi.cod .val{color:var(--warn)} .kpi.gold{background:#FFF9E8}
+/* بدل التاجر: نفس بنفسجيّ شارته في الكشوف كي يُعرف بلونه في كل مكان */
+.kpi.merch .val{color:#5b3fa3}
 
 /* ---------- الجداول ---------- */
 table{width:100%;border-collapse:collapse;font-size:14px}

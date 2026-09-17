@@ -1587,7 +1587,8 @@ async function vMahmoud(initialTab){
     <div id="mtab"></div>`;
   const TABS=[["summary","الملخّص"],["parties","الجهات والأرصدة"],["debts","تقرير الديون"],
               ["entry","تسجيل عملية"],
-              ["revenues","إيرادات الشحنات"],["ledger","سجل العمليات"],["fx","سعر صرف الدينار"],
+              ["revenues","إيرادات الشحنات"],["monthly","تقرير الوارد الشهري"],
+              ["ledger","سجل العمليات"],["fx","سعر صرف الدينار"],
               ["customs","مقارنة الجمارك"]];
   // فترة البحث والتبويب محفوظان: العودة من كشف حساب أو نموذج عملية لا تمسحهما
   const mst = viewState("mahmoud", {tab:"summary", f:{}});
@@ -1611,6 +1612,7 @@ async function vMahmoud(initialTab){
       else if(cur==="parties") await mParties(box, period(), body, go);
       else if(cur==="entry")   await mEntryForm(box, body, go);
       else if(cur==="revenues")await mRevenues(box, period());
+      else if(cur==="monthly") await mMonthly(box, period());
       else if(cur==="ledger")  await mLedger(box, period(), body);
       else if(cur==="fx")      await mFxRate(box, body);
       else if(cur==="debts")   await mDebts(box, period());
@@ -1803,23 +1805,34 @@ async function mParties(box, period, reload, go){
 }
 
 // ------------------- كشف حساب جهة (نافذة كاملة) -------------------
-async function mStatement(pid, fromTab){
+async function mStatement(pid, fromTab, period){
   const v=$("#view");
   v.innerHTML=`<div class="loading"><div class="spinner"></div></div>`;
-  const d=await API.get(`/api/mahmoud/parties/${pid}/statement`);
+  // بحث بالتاريخ داخل الكشف — يُمرَّر لكل إعادة رسم فلا يضيع بعد تسجيل عملية أو إلغائها
+  const pr = period || {date_from:"", date_to:""};
+  const again = ()=>mStatement(pid, fromTab, pr);
+  const d=await API.get(`/api/mahmoud/parties/${pid}/statement`,
+                        {date_from:pr.date_from, date_to:pr.date_to});
   const p=d.party, t=d.totals;
+  const ranged = !!(pr.date_from || pr.date_to);
   // بطاقات مستقلة لكل عملة — لا يُجمع دولار مع يورو أبداً
   // بطاقة الوضع الصريح: هل الجهة مدينة لنا، أم لها علينا — بالكلمات لا بالإشارة وحدها
-  const posCard=c=> c.balance>0.01
+  // مع بحث بالتاريخ يبقى «الوضع» هو الرصيد الكلي لا حركة الفترة — وإلا بدت
+  // جهة مسدَّدة مدينةً لمجرّد أن دفعتها خارج المدى المختار
+  const posCard=c=>{
+    const bal = ranged ? (c.balance_all_time ?? c.balance) : c.balance;
+    const note = ranged ? '<div class="mini">الرصيد الكلي — غير محدود بالفترة</div>' : "";
+    return bal>0.01
     ? `<div class="kpi owe"><div class="label">الجهة مدينة لنا بـ</div>
-         <div class="val">${cmoney(c.balance,c.currency)}</div>
-         <div class="mini">مستحق علينا تحصيله منها</div></div>`
-    : (c.balance<-0.01
+         <div class="val">${cmoney(bal,c.currency)}</div>
+         <div class="mini">مستحق علينا تحصيله منها</div>${note}</div>`
+    : (bal<-0.01
       ? `<div class="kpi credit"><div class="label">للجهة علينا</div>
-           <div class="val">${cmoney(-c.balance,c.currency)}</div>
-           <div class="mini">رصيد دائن — دفعت أكثر مما عليها</div></div>`
+           <div class="val">${cmoney(-bal,c.currency)}</div>
+           <div class="mini">رصيد دائن — دفعت أكثر مما عليها</div>${note}</div>`
       : `<div class="kpi"><div class="label">الوضع</div><div class="val">مسدَّدة</div>
-           <div class="mini">لا لها ولا عليها</div></div>`);
+           <div class="mini">لا لها ولا عليها</div>${note}</div>`);
+  };
   const active=(d.by_currency||[]).filter(c=>
     ["charges","payments","expenses","merchant"].some(k=>Math.abs(c[k]||0)>0.005)
     || Math.abs(c.balance_all_time||0)>0.005);
@@ -1834,9 +1847,10 @@ async function mStatement(pid, fromTab){
         <div class="kpi cash"><div class="label">إجمالي بدل التاجر</div><div class="val">${cmoney(c.merchant||0,c.currency)}</div></div>
         <div class="kpi"><div class="label">عدد الدفعات</div><div class="val">${c.payments_count}</div></div>
       </div>
-      <p class="hint">الرصيد = المطلوب ${cmoney(c.charges,c.currency)} −
+      <p class="hint">${ranged?"حركة الفترة":"الرصيد"} = المطلوب ${cmoney(c.charges,c.currency)} −
         [المدفوع ${cmoney(c.payments,c.currency)} + المصاريف ${cmoney(c.expenses,c.currency)}
-        + بدل التاجر ${cmoney(c.merchant||0,c.currency)}] = <b>${cmoney(c.balance,c.currency)}</b></p>
+        + بدل التاجر ${cmoney(c.merchant||0,c.currency)}] = <b>${cmoney(c.balance,c.currency)}</b>
+        ${ranged?`— والرصيد الكلي <b>${cmoney(c.balance_all_time??c.balance,c.currency)}</b>`:""}</p>
     </div>`).join("");
   v.innerHTML=`<h1>كشف حساب: ${p.name}</h1>
     <div class="card no-print"><div class="btn-row">
@@ -1845,6 +1859,17 @@ async function mStatement(pid, fromTab){
       <button class="sm" id="xl">⬇ تصدير Excel</button>
       <button class="primary" id="newTxn">＋ تسجيل عملية لهذه الجهة</button>
     </div></div>
+    <div class="card no-print"><div class="filters">
+      <label>من تاريخ<input type="date" id="sdf" value="${pr.date_from||""}"></label>
+      <label>إلى تاريخ<input type="date" id="sdt" value="${pr.date_to||""}"></label>
+      <button class="sm primary" id="sgo">بحث</button>
+      <button class="sm" id="sclr">كل الفترات</button>
+    </div>
+    <p class="hint">${ranged
+      ? `الكشف مقصور على <b>${pr.date_from||"البداية"} → ${pr.date_to||"اليوم"}</b>.
+         «الرصيد قبل/بعد» في الجدول يبقى الرصيد الجاري الحقيقي محسوباً من أول حركة
+         للجهة، لا من بداية الفترة — فلا ينكسر التسلسل.`
+      : "ابحث بالتاريخ لقصر الكشف والمجاميع على فترة محددة."}</p></div>
     <div class="only-print">${brandHead()}</div>
     <div class="card"><h3>${p.name} <span class="count-badge">${p.box_type}</span></h3>
       ${curCards}
@@ -1861,7 +1886,11 @@ async function mStatement(pid, fromTab){
 
   $("#back").onclick=()=>vMahmoud(fromTab||"parties");
   $("#pr").onclick=()=>printDoc("portrait");
-  $("#newTxn").onclick=()=>mTxnDialog(pid, p.name, ()=>mStatement(pid, fromTab));
+  $("#sgo").onclick=()=>mStatement(pid, fromTab,
+    {date_from:$("#sdf").value, date_to:$("#sdt").value});
+  $("#sclr").onclick=()=>mStatement(pid, fromTab, {date_from:"", date_to:""});
+  ["sdf","sdt"].forEach(id=>$("#"+id).onchange=()=>$("#sgo").click());
+  $("#newTxn").onclick=()=>mTxnDialog(pid, p.name, again);
   $("#xl").onclick=()=>exportXlsx([
       ["txn_date","التاريخ",r=>r.txn_date],["created_at_time","الوقت",r=>r.created_at_time],
       ["id","رقم العملية",r=>r.id],["txn_type","نوع الحركة",r=>r.txn_type],
@@ -1900,24 +1929,24 @@ async function mStatement(pid, fromTab){
     const reason=prompt("سبب الإلغاء (اختياري):","");
     if(reason===null) return;
     try{ await API.post(`/api/mahmoud/txn/${b.dataset.void}/void`,{reason});
-      toast("أُلغي القيد — بقي في الكشف للمراجعة"); mStatement(pid, fromTab);
+      toast("أُلغي القيد — بقي في الكشف للمراجعة"); again();
     }catch(err){ toast(err.message, true); }
   });
   $("#lg").querySelectorAll("[data-edit]").forEach(b=>b.onclick=()=>{
     const r=d.ledger.find(x=>String(x.id)===b.dataset.edit);
-    mTxnDialog(pid, p.name, ()=>mStatement(pid, fromTab), r);
+    mTxnDialog(pid, p.name, ()=>again(), r);
   });
   // حذف نهائي — يختفي القيد من الكشف تماماً (بخلاف الإلغاء الذي يُبقي أثره)
   $("#lg").querySelectorAll("[data-hdel]").forEach(b=>b.onclick=async()=>{
     if(!confirm("حذف نهائي: سيختفي القيد من الكشف تماماً ولا يمكن التراجع. متابعة؟")) return;
     try{ await API.del("/api/mahmoud/txn/"+b.dataset.hdel);
-      toast("حُذف القيد نهائياً"); mStatement(pid, fromTab);
+      toast("حُذف القيد نهائياً"); again();
     }catch(err){ toast(err.message, true); }
   });
   if(["مكتب","زبون"].includes(p.box_type))
-    loadAutoCharges(pid, ()=>mStatement(pid, fromTab));
+    loadAutoCharges(pid, ()=>again());
   if(p.box_type==="مكتب")
-    loadMerchant(pid, ()=>mStatement(pid, fromTab));
+    loadMerchant(pid, ()=>again());
 }
 
 // سطر يوضّح أصل قيد أُدخل بالدينار: المبلغ الأصلي وسعر الصرف الذي حُوِّل به
@@ -2318,6 +2347,125 @@ async function mRevenues(box, period){
         }catch(err){ toast(err.message, true); }
       };
     });
+  };
+  render();
+}
+
+// ------------------------ تقرير الوارد الشهري ------------------------
+// الوارد = (الأجور + عمولة ثمن البضاعة) − (مصاريف الجهات + بدل التاجر).
+// كل عملة كتلة مستقلة، فلا يُطرح مصروف باليورو من وارد بالدولار.
+async function mMonthly(box, period){
+  const d=await API.get("/api/mahmoud/monthly-revenue", period);
+  const open=new Set();                       // الأشهر المفتوحة تفصيلُ جهاتها
+  const usd=b=>(b.by_currency||[]).find(c=>c.currency===CUR_USD)
+            || {currency:CUR_USD, gross:0, expenses:0, merchant:0, revenue:0, parties:[]};
+  // عملات أخرى ظهرت فيها مصاريف أو بدل تاجر — تُعرض منفصلة لا مدموجة
+  const others=(b)=>(b.by_currency||[]).filter(c=>c.currency!==CUR_USD
+    && (Math.abs(c.expenses)>0.005 || Math.abs(c.merchant)>0.005));
+  const t=d.totals, tu=usd(t), to=others(t);
+  const periodLabel=(period.date_from||period.date_to)
+    ? `من ${period.date_from||"البداية"} إلى ${period.date_to||"اليوم"}`
+    : "كل الفترات (فلتر التاريخ أعلاه فارغ)";
+
+  // صفوف جدول عملة واحدة (الشهر، ثم أرقام تلك العملة)
+  const monthRows=cur=>d.rows.map(r=>{
+    const b=(r.by_currency||[]).find(c=>c.currency===cur);
+    if(!b || (cur!==CUR_USD && Math.abs(b.expenses)<=0.005 && Math.abs(b.merchant)<=0.005)) return "";
+    const isU=cur===CUR_USD;
+    return `<tr data-m="${r.month}" data-c="${cur}">
+      <td class="nowrap"><b>${r.month}</b></td>
+      ${isU?`<td>${r.shipments}</td>
+        <td>${cmoney(r.fees_total,cur)}</td><td>${cmoney(r.commission,cur)}</td>
+        <td><b>${cmoney(b.gross,cur)}</b></td>`:""}
+      <td>${cmoney(b.expenses,cur)}</td>
+      <td>${cmoney(b.merchant,cur)}</td>
+      <td><b class="${b.revenue<0?'neg':''}">${cmoney(b.revenue,cur)}</b></td>
+      <td class="no-print">${b.parties.length
+        ? `<button class="sm" data-det>${open.has(r.month+cur)?"إخفاء":`جهات (${b.parties.length})`}</button>`
+        : ""}</td></tr>
+      ${open.has(r.month+cur)?`<tr class="detail-row"><td colspan="${isU?9:5}">
+        ${wrapTable(`<table><thead><tr><th>الجهة</th><th>مصاريفها في ${r.month}</th>
+          <th>من إجمالي مصاريف الشهر</th></tr></thead><tbody>
+          ${b.parties.map(p=>`<tr><td>${p.name}</td><td>${cmoney(p.amount,cur)}</td>
+            <td class="mini">${b.expenses?Math.round(p.amount/b.expenses*100):0}%</td></tr>`).join("")}
+          <tr class="total-row"><td><b>المجموع</b></td>
+            <td><b>${cmoney(b.expenses,cur)}</b></td><td></td></tr>
+        </tbody></table>`)}</td></tr>`:""}`;
+  }).join("");
+
+  const render=()=>{
+    box.innerHTML=`<div class="card"><h3>تقرير الوارد الشهري</h3>
+      <p class="hint basis">الأساس: <b>${periodLabel}</b> — الأجور والعمولة بشهر
+        <b>تاريخ التصدير</b> (كتبويب إيرادات الشحنات)، والمصاريف وبدل التاجر بشهر
+        <b>تاريخ القيد</b> في دفتر الأستاذ. كل عملة كتلة مستقلة ولا تُجمع بغيرها.</p>
+      <p class="hint"><b>الوارد</b> = أجور الشحن والجمركة + عمولة ثمن البضاعة −
+        مصاريف الجهات − بدل التاجر. <b>ثمن البضاعة نفسه ليس وارداً</b> — مال الزبون
+        يمرّ بنا، والعمولة وحدها ما نكسبه منه. الأجور والعمولة مقرَّبتان لكل شحنة ثم مجموعتان.</p>
+      <div class="kpis" style="margin:12px 0">
+        <div class="kpi"><div class="label">إجمالي أجور الشحن والجمركة</div>
+          <div class="val">${cmoney(t.fees_total,CUR_USD)}</div>
+          <div class="mini">${t.shipments} شحنة في ${t.months} شهر</div></div>
+        <div class="kpi gold"><div class="label">عمولة ثمن البضاعة</div>
+          <div class="val">${cmoney(t.commission,CUR_USD)}</div></div>
+        <div class="kpi"><div class="label">مجموعهما (الوارد قبل الخصم)</div>
+          <div class="val">${cmoney(tu.gross,CUR_USD)}</div></div>
+        <div class="kpi cod"><div class="label">إجمالي مصاريف الجهات</div>
+          <div class="val">${cmoney(tu.expenses,CUR_USD)}</div>
+          <div class="mini">${tu.parties.length} جهة</div></div>
+        <div class="kpi merch"><div class="label">إجمالي بدل التاجر</div>
+          <div class="val">${cmoney(tu.merchant,CUR_USD)}</div></div>
+        <div class="kpi cash"><div class="label">الوارد الصافي</div>
+          <div class="val ${tu.revenue<0?'neg':''}">${cmoney(tu.revenue,CUR_USD)}</div></div>
+      </div>
+      <div class="btn-row no-print">
+        <button class="sm" id="mmpr">🖨 طباعة</button>
+        <button class="sm" id="mmxl">⬇ تصدير Excel</button></div>
+      <div id="mm"></div>
+      ${to.length?`<h3 class="sub" style="margin-top:18px">عملات أخرى</h3>
+        <p class="hint">مصاريف وبدل تاجر بعملات غير الدولار. الأجور والعمولة بالدولار،
+          فوارد هذه الكتل سالب بطبيعته ولا يُطرح من وارد الدولار بلا سعر صرف صريح.</p>
+        <div id="mmo"></div>`:""}</div>`;
+
+    $("#mm").innerHTML = d.rows.length ? wrapTable(`<table><thead><tr>
+        <th>الشهر</th><th>عدد الشحنات</th><th>أجور الشحن والجمركة</th>
+        <th>عمولة ثمن البضاعة</th><th>مجموعهما</th>
+        <th>مصاريف الجهات</th><th>بدل التاجر</th><th>الوارد</th><th class="no-print"></th>
+      </tr></thead><tbody>${monthRows(CUR_USD)}
+      <tr class="total-row"><td><b>الإجمالي</b></td><td><b>${t.shipments}</b></td>
+        <td><b>${cmoney(t.fees_total,CUR_USD)}</b></td>
+        <td><b>${cmoney(t.commission,CUR_USD)}</b></td>
+        <td><b>${cmoney(tu.gross,CUR_USD)}</b></td>
+        <td><b>${cmoney(tu.expenses,CUR_USD)}</b></td>
+        <td><b>${cmoney(tu.merchant,CUR_USD)}</b></td>
+        <td><b class="${tu.revenue<0?'neg':''}">${cmoney(tu.revenue,CUR_USD)}</b></td>
+        <td class="no-print"></td></tr></tbody></table>`)
+      : empty("لا توجد بيانات ضمن الفترة المحددة");
+
+    if(to.length) $("#mmo").innerHTML=to.map(c=>`<h4 class="sub">بال${c.currency}</h4>
+      ${wrapTable(`<table><thead><tr><th>الشهر</th><th>مصاريف الجهات</th>
+        <th>بدل التاجر</th><th>الوارد</th><th class="no-print"></th></tr></thead>
+      <tbody>${monthRows(c.currency)}
+        <tr class="total-row"><td><b>الإجمالي</b></td>
+          <td><b>${cmoney(c.expenses,c.currency)}</b></td>
+          <td><b>${cmoney(c.merchant,c.currency)}</b></td>
+          <td><b class="${c.revenue<0?'neg':''}">${cmoney(c.revenue,c.currency)}</b></td>
+          <td class="no-print"></td></tr></tbody></table>`)}`).join("");
+
+    box.querySelectorAll("tr[data-m] [data-det]").forEach(b=>b.onclick=()=>{
+      const tr=b.closest("tr"), k=tr.dataset.m+tr.dataset.c;
+      open.has(k) ? open.delete(k) : open.add(k);
+      render();
+    });
+    $("#mmpr").onclick=()=>printDoc("landscape");
+    $("#mmxl").onclick=()=>exportXlsx([
+      ["month","الشهر",r=>r.month],["shipments","عدد الشحنات",r=>r.shipments],
+      ["fees","أجور الشحن والجمركة",r=>r.fees_total],
+      ["commission","عمولة ثمن البضاعة",r=>r.commission],
+      ["gross","مجموعهما",r=>usd(r).gross],
+      ["expenses","مصاريف الجهات",r=>usd(r).expenses],
+      ["merchant","بدل التاجر",r=>usd(r).merchant],
+      ["revenue","الوارد",r=>usd(r).revenue],
+    ], d.rows, "monthly", "تقرير الوارد الشهري");
   };
   render();
 }

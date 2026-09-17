@@ -1261,6 +1261,87 @@ def save_export_revenue(export_date: str, payload: dict,
     return r
 
 
+# ===================== تقرير الوارد الشهري =====================
+# الوارد = (أجور الشحن والجمركة + عمولة ثمن البضاعة) − (مصاريف الجهات + بدل التاجر).
+# ثمن البضاعة نفسه ليس وارداً — مالُ الزبون يمرّ بنا، والعمولة وحدها ما نكسبه منه.
+#
+# أساسان زمنيان مختلفان بحكم طبيعة البيانات، وكلاهما مذكور في الواجهة:
+#   • الأجور والعمولة: بشهر **تاريخ التصدير** (كتبويب إيرادات الشحنات) لا تاريخ الشحنة.
+#   • المصاريف وبدل التاجر: بشهر **تاريخ القيد** في دفتر الأستاذ.
+#
+# العملات لا تُجمع أبداً: لكل عملة كتلتها ووارِدها. والأجور والعمولة بالدولار،
+# فلا تدخل إلا كتلة الدولار — وهذا يمنع طرح مصروف باليورو من وارد بالدولار.
+@router.get("/monthly-revenue")
+def monthly_revenue(db: Session = Depends(get_session), user: User = Depends(admin_or_accountant),
+                    date_from: Optional[str] = None, date_to: Optional[str] = None):
+    months: dict[str, dict] = {}
+
+    def slot(m: str) -> dict:
+        return months.setdefault(m, {"month": m, "shipments": 0, "fees_total": 0,
+                                     "commission": 0, "cur": {}})
+
+    def cur_slot(d: dict, c: str) -> dict:
+        return d["cur"].setdefault(c, {"currency": c, "expenses": 0.0, "merchant": 0.0,
+                                       "parties": {}})
+
+    # ---- الأجور والعمولة من الشحنات الصادرة (كل شحنة تُقرَّب ثم تُجمع) ----
+    for s, c, _gwc in _computed_exported(db):
+        k = str(s.export_date)
+        if date_from and k < date_from: continue
+        if date_to and k > date_to: continue
+        d = slot(k[:7])
+        d["shipments"] += 1
+        d["fees_total"] += _rint(c.get("fees_total", 0.0))
+        d["commission"] += _rint(c.get("commission", 0.0))
+
+    # ---- المصاريف وبدل التاجر من دفتر الأستاذ، مفصّلة حسب الجهة ----
+    names = {p.id: p.name for p in db.exec(select(MBox)).all()}
+    for t in _live(db, None, date_from, date_to):
+        if t.txn_type not in (TXN_EXPENSE, TXN_MERCHANT):
+            continue
+        cs = cur_slot(slot(str(t.txn_date)[:7]), _cur(t))
+        if t.txn_type == TXN_EXPENSE:
+            cs["expenses"] += t.amount
+            nm = names.get(t.party_id, "—")
+            cs["parties"][nm] = round(cs["parties"].get(nm, 0.0) + t.amount, 2)
+        else:
+            cs["merchant"] += t.amount
+
+    def blocks(d: dict) -> list[dict]:
+        """كتلة لكل عملة. الدولار حاضر دائماً لأنه وعاء الأجور والعمولة."""
+        out = []
+        for c in [CUR_USD] + [x for x in sorted(d["cur"]) if x != CUR_USD]:
+            b = d["cur"].get(c) or {"currency": c, "expenses": 0.0, "merchant": 0.0, "parties": {}}
+            gross = (d["fees_total"] + d["commission"]) if c == CUR_USD else 0.0
+            exp, mer = round(b["expenses"], 2), round(b["merchant"], 2)
+            out.append({"currency": c, "gross": gross, "expenses": exp, "merchant": mer,
+                        "revenue": round(gross - exp - mer, 2),
+                        "parties": sorted(({"name": n, "amount": v} for n, v in b["parties"].items()),
+                                          key=lambda x: -x["amount"])})
+        return out
+
+    rows = [{"month": d["month"], "shipments": d["shipments"],
+             "fees_total": d["fees_total"], "commission": d["commission"],
+             "by_currency": blocks(d)}
+            for d in (months[m] for m in sorted(months, reverse=True))]
+
+    # ---- المجاميع: نفس البنية، فتُعرض بنفس الطريقة بلا منطق ثانٍ في الواجهة ----
+    grand = {"month": "الإجمالي", "shipments": 0, "fees_total": 0, "commission": 0, "cur": {}}
+    for d in months.values():
+        grand["shipments"] += d["shipments"]
+        grand["fees_total"] += d["fees_total"]
+        grand["commission"] += d["commission"]
+        for c, b in d["cur"].items():
+            g = cur_slot(grand, c)
+            g["expenses"] += b["expenses"]; g["merchant"] += b["merchant"]
+            for n, v in b["parties"].items():
+                g["parties"][n] = round(g["parties"].get(n, 0.0) + v, 2)
+    return {"rows": rows,
+            "totals": {"months": len(rows), "shipments": grand["shipments"],
+                       "fees_total": grand["fees_total"], "commission": grand["commission"],
+                       "by_currency": blocks(grand)}}
+
+
 # ============ ترحيل بيانات النظام القديم (يُنفَّذ مرة واحدة) ============
 def migrate_legacy(db: Session) -> int:
     """يحوّل حركات النظام القديم إلى قيود دفتر الأستاذ:
