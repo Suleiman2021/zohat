@@ -284,6 +284,8 @@ function route(key,link){
   $(".sidebar").classList.remove("open");   // إغلاق قائمة الموبايل بعد الاختيار
   // فاتورة الزبون ولوحة التقارير تُطبعان بخط أكبر (صنف big-print في تنسيق الطباعة)
   $("#view").classList.toggle("big-print", key==="invoice"||key==="reports");
+  // الطباعة المتوسطة تخصّ شاشات بعينها (كشف الحساب) — تُرفع عند مغادرتها
+  $("#view").classList.remove("mid-print");
   $("#view").innerHTML=`<div class="loading"><div class="spinner"></div></div>`;
   ({dashboard:vDashboard,shipments:vShipments,customs:vCustoms,broker:vBroker,invoice:vInvoice,
     reports:vReports,accounting:vAccounting,mahmoud:vMahmoud,items:vItems,lists:vLists,printfx:vPrintFx,users:vUsers,deliver:vDeliver}[key])();
@@ -1852,10 +1854,11 @@ async function mStatement(pid, fromTab, period){
         + بدل التاجر ${cmoney(c.merchant||0,c.currency)}] = <b>${cmoney(c.balance,c.currency)}</b>
         ${ranged?`— والرصيد الكلي <b>${cmoney(c.balance_all_time??c.balance,c.currency)}</b>`:""}</p>
     </div>`).join("");
+  v.classList.add("mid-print");      // خط طباعة متوسط لكشف الحساب
   v.innerHTML=`<h1>كشف حساب: ${p.name}</h1>
     <div class="card no-print"><div class="btn-row">
       <button class="sm" id="back">← رجوع</button>
-      <button class="sm" id="pr">🖨 طباعة</button>
+      <button class="sm" id="pr">🖨 طباعة PDF</button>
       <button class="sm" id="xl">⬇ تصدير Excel</button>
       <button class="primary" id="newTxn">＋ تسجيل عملية لهذه الجهة</button>
     </div></div>
@@ -1870,12 +1873,35 @@ async function mStatement(pid, fromTab, period){
          «الرصيد قبل/بعد» في الجدول يبقى الرصيد الجاري الحقيقي محسوباً من أول حركة
          للجهة، لا من بداية الفترة — فلا ينكسر التسلسل.`
       : "ابحث بالتاريخ لقصر الكشف والمجاميع على فترة محددة."}</p></div>
-    <div class="only-print">${brandHead()}</div>
-    <div class="card"><h3>${p.name} <span class="count-badge">${p.box_type}</span></h3>
-      ${curCards}
+    <div class="only-print">${brandHead()}
+      <h2 class="print-title">كشف حساب: ${p.name}</h2>
+      <p class="print-meta">${p.box_type} — الفترة:
+        ${ranged?`${pr.date_from||"البداية"} → ${pr.date_to||"اليوم"}`:"كل الفترات"}
+        — ${d.ledger.length} حركة. آخر دفعة: ${t.last_payment
+          ? cmoney(t.last_payment, t.last_payment_currency)
+            +(t.last_payment_date?` في ${t.last_payment_date}`:"")
+          : "—"}. طُبع في ${new Date().toLocaleDateString("ar-EG")}</p>
+      <h3>ملخّص الأرصدة لكل عملة</h3>
+      ${wrapTable(`<table><thead><tr><th>العملة</th><th>إجمالي المطلوب</th>
+        <th>إجمالي المدفوع</th><th>المصاريف</th><th>بدل التاجر</th><th>عدد الدفعات</th>
+        <th>${ranged?"حركة الفترة":"الرصيد"}</th>${ranged?"<th>الرصيد الكلي</th>":""}
+        <th>الوضع</th></tr></thead><tbody>
+        ${(active.length?active:(d.by_currency||[]).slice(0,1)).map(c=>{
+          const bal=ranged?(c.balance_all_time??c.balance):c.balance;
+          return `<tr><td><b>${c.currency}</b></td>
+            <td>${cmoney(c.charges,c.currency)}</td><td>${cmoney(c.payments,c.currency)}</td>
+            <td>${cmoney(c.expenses,c.currency)}</td><td>${cmoney(c.merchant||0,c.currency)}</td>
+            <td>${c.payments_count}</td>
+            <td><b>${cmoney(c.balance,c.currency)}</b></td>
+            ${ranged?`<td><b>${cmoney(c.balance_all_time??c.balance,c.currency)}</b></td>`:""}
+            <td>${bal>0.01?"مدينة لنا":(bal<-0.01?"لها علينا":"مسدَّدة")}</td></tr>`;
+        }).join("")}</tbody></table>`)}</div>
+    <div class="card"><h3 class="no-print">${p.name}
+        <span class="count-badge">${p.box_type}</span></h3>
+      <div class="no-print">${curCards}
       <p class="hint">آخر دفعة: ${t.last_payment
         ? cmoney(t.last_payment, t.last_payment_currency)+(t.last_payment_date?` — ${t.last_payment_date}`:"")
-        : "—"}</p></div>
+        : "—"}</p></div></div>
     ${p.box_type==="مكتب"?`<div class="card no-print">
       <h3>🧾 بدل تاجر من الشحنات المُرسَلة من هذا المكتب</h3>
       <div id="mc"><div class="loading"><div class="spinner"></div></div></div></div>`:""}
@@ -1885,7 +1911,8 @@ async function mStatement(pid, fromTab, period){
     <div class="card"><h3>كشف الحساب مرتّباً بالتاريخ</h3><div id="lg"></div></div>`;
 
   $("#back").onclick=()=>vMahmoud(fromTab||"parties");
-  $("#pr").onclick=()=>printDoc("portrait");
+  // عرضية: أعمدة الكشف اثنا عشر، فلا تتزاحم على صفحة طولية
+  $("#pr").onclick=()=>printDoc("landscape");
   $("#sgo").onclick=()=>mStatement(pid, fromTab,
     {date_from:$("#sdf").value, date_to:$("#sdt").value});
   $("#sclr").onclick=()=>mStatement(pid, fromTab, {date_from:"", date_to:""});
@@ -1900,7 +1927,13 @@ async function mStatement(pid, fromTab, period){
       ["balance_before","الرصيد قبل",r=>r.balance_before??""],
       ["balance_after","الرصيد بعد",r=>r.balance_after??""],
       ["created_by","المستخدم",r=>r.created_by||"-"],["notes","ملاحظات",r=>r.notes||"-"],
-    ], d.ledger, "mstmt", `كشف حساب ${p.name}`);
+      // حالة القيد وسببها: بدونها يبدو قيد ملغى في Excel كأنه سارٍ
+      ["state","حالة القيد",r=>r.is_void?"ملغاة":"سارية"],
+      ["void_reason","سبب الإلغاء",r=>r.is_void?(r.void_reason||"—"):""],
+      ["voided_by","ألغاها",r=>r.is_void?(r.voided_by||"—"):""],
+      ["edited_count","مرات التعديل",r=>r.edited_count||0],
+    ], d.ledger, "mstmt", `كشف حساب ${p.name}`
+       + (ranged?` ${pr.date_from||"البداية"} إلى ${pr.date_to||"اليوم"}`:""));
 
   $("#lg").innerHTML = d.ledger.length ? wrapTable(`<table><thead><tr>
       <th>التاريخ</th><th>الوقت</th><th>رقم</th><th>نوع الحركة</th><th>السبب/البند</th>
@@ -2393,8 +2426,47 @@ async function mMonthly(box, period){
         </tbody></table>`)}</td></tr>`:""}`;
   }).join("");
 
+  // نسخة الطباعة: كل شهر كتلة مستقلة بتفصيل جهاته كاملاً مهما كان المطويّ على الشاشة
+  const printBlocks=()=>{
+    const curTable=(b, r)=>`<table><thead><tr>
+        ${b.currency===CUR_USD?`<th>عدد الشحنات</th><th>أجور الشحن والجمركة</th>
+          <th>عمولة ثمن البضاعة</th><th>مجموعهما</th>`:""}
+        <th>مصاريف الجهات</th><th>بدل التاجر</th><th>الوارد</th></tr></thead>
+      <tbody><tr>
+        ${b.currency===CUR_USD?`<td>${r.shipments}</td>
+          <td>${cmoney(r.fees_total,b.currency)}</td>
+          <td>${cmoney(r.commission,b.currency)}</td>
+          <td><b>${cmoney(b.gross,b.currency)}</b></td>`:""}
+        <td>${cmoney(b.expenses,b.currency)}</td>
+        <td>${cmoney(b.merchant,b.currency)}</td>
+        <td><b>${cmoney(b.revenue,b.currency)}</b></td></tr></tbody></table>`;
+    const partyTable=b=>!b.parties.length ? "" : `<div class="print-detail">
+        <h5>تفصيل مصاريف الجهات (بال${b.currency})</h5>
+        <table><thead><tr><th>الجهة</th><th>المبلغ</th><th>النسبة</th></tr></thead>
+        <tbody>${b.parties.map(p=>`<tr><td>${p.name}</td>
+          <td>${cmoney(p.amount,b.currency)}</td>
+          <td>${b.expenses?Math.round(p.amount/b.expenses*100):0}%</td></tr>`).join("")}
+          <tr class="total-row"><td><b>المجموع</b></td>
+            <td><b>${cmoney(b.expenses,b.currency)}</b></td><td></td></tr>
+        </tbody></table></div>`;
+    const blocks=(r, head)=>`<div class="print-block"><h4>${head}</h4>
+      ${(r.by_currency||[]).filter(b=>b.currency===CUR_USD
+          || Math.abs(b.expenses)>0.005 || Math.abs(b.merchant)>0.005)
+        .map(b=>`${(r.by_currency||[]).length>1?`<div class="sub">بال${b.currency}</div>`:""}
+          ${curTable(b, r)}${partyTable(b)}`).join("")}</div>`;
+    return d.rows.map(r=>blocks(r, `شهر ${r.month}`)).join("")
+      + (d.rows.length>1 ? blocks(t, "إجمالي كل الأشهر") : "");
+  };
+
   const render=()=>{
-    box.innerHTML=`<div class="card"><h3>تقرير الوارد الشهري</h3>
+    box.innerHTML=`<div class="card mid-print">
+      <div class="only-print">${brandHead()}
+        <h2 class="print-title">تقرير الوارد الشهري</h2>
+        <p class="print-meta">الفترة: ${periodLabel} — ${t.months} شهر و${t.shipments} شحنة.
+          الوارد = الأجور + عمولة ثمن البضاعة − مصاريف الجهات − بدل التاجر.
+          الأجور والعمولة بشهر تاريخ التصدير، والمصاريف وبدل التاجر بشهر تاريخ القيد.
+          طُبع في ${new Date().toLocaleDateString("ar-EG")}</p></div>
+      <h3 class="no-print">تقرير الوارد الشهري</h3>
       <p class="hint basis">الأساس: <b>${periodLabel}</b> — الأجور والعمولة بشهر
         <b>تاريخ التصدير</b> (كتبويب إيرادات الشحنات)، والمصاريف وبدل التاجر بشهر
         <b>تاريخ القيد</b> في دفتر الأستاذ. كل عملة كتلة مستقلة ولا تُجمع بغيرها.</p>
@@ -2420,11 +2492,12 @@ async function mMonthly(box, period){
       <div class="btn-row no-print">
         <button class="sm" id="mmpr">🖨 طباعة</button>
         <button class="sm" id="mmxl">⬇ تصدير Excel</button></div>
-      <div id="mm"></div>
-      ${to.length?`<h3 class="sub" style="margin-top:18px">عملات أخرى</h3>
+      <div id="mm" class="no-print"></div>
+      ${to.length?`<h3 class="sub no-print" style="margin-top:18px">عملات أخرى</h3>
         <p class="hint">مصاريف وبدل تاجر بعملات غير الدولار. الأجور والعمولة بالدولار،
           فوارد هذه الكتل سالب بطبيعته ولا يُطرح من وارد الدولار بلا سعر صرف صريح.</p>
-        <div id="mmo"></div>`:""}</div>`;
+        <div id="mmo" class="no-print"></div>`:""}
+      <div class="only-print">${printBlocks()}</div></div>`;
 
     $("#mm").innerHTML = d.rows.length ? wrapTable(`<table><thead><tr>
         <th>الشهر</th><th>عدد الشحنات</th><th>أجور الشحن والجمركة</th>
@@ -2456,16 +2529,36 @@ async function mMonthly(box, period){
       open.has(k) ? open.delete(k) : open.add(k);
       render();
     });
-    $("#mmpr").onclick=()=>printDoc("landscape");
-    $("#mmxl").onclick=()=>exportXlsx([
-      ["month","الشهر",r=>r.month],["shipments","عدد الشحنات",r=>r.shipments],
-      ["fees","أجور الشحن والجمركة",r=>r.fees_total],
-      ["commission","عمولة ثمن البضاعة",r=>r.commission],
-      ["gross","مجموعهما",r=>usd(r).gross],
-      ["expenses","مصاريف الجهات",r=>usd(r).expenses],
-      ["merchant","بدل التاجر",r=>usd(r).merchant],
-      ["revenue","الوارد",r=>usd(r).revenue],
-    ], d.rows, "monthly", "تقرير الوارد الشهري");
+    $("#mmpr").onclick=()=>printDoc("portrait");
+    // Excel مفصَّل: سطر لكل شهر/عملة يتبعه سطر لكل جهة أنفقت فيه
+    $("#mmxl").onclick=()=>{
+      const flat=[];
+      const push=(r,label)=>(r.by_currency||[])
+        .filter(b=>b.currency===CUR_USD || Math.abs(b.expenses)>0.005 || Math.abs(b.merchant)>0.005)
+        .forEach(b=>{
+          flat.push({month:label, item:"إجمالي الفترة", currency:b.currency,
+            shipments:b.currency===CUR_USD?r.shipments:"",
+            fees:b.currency===CUR_USD?r.fees_total:"",
+            commission:b.currency===CUR_USD?r.commission:"",
+            gross:b.gross, expenses:b.expenses, merchant:b.merchant, revenue:b.revenue});
+          b.parties.forEach(p=>flat.push({month:label, item:"مصروف جهة: "+p.name,
+            currency:b.currency, shipments:"", fees:"", commission:"", gross:"",
+            expenses:p.amount, merchant:"", revenue:""}));
+        });
+      d.rows.forEach(r=>push(r, r.month));
+      if(d.rows.length>1) push(t, "الإجمالي");
+      exportXlsx([
+        ["month","الشهر",r=>r.month],["item","البند",r=>r.item],
+        ["currency","العملة",r=>r.currency],
+        ["shipments","عدد الشحنات",r=>r.shipments],
+        ["fees","أجور الشحن والجمركة",r=>r.fees],
+        ["commission","عمولة ثمن البضاعة",r=>r.commission],
+        ["gross","مجموعهما",r=>r.gross],
+        ["expenses","مصاريف الجهات",r=>r.expenses],
+        ["merchant","بدل التاجر",r=>r.merchant],
+        ["revenue","الوارد",r=>r.revenue],
+      ], flat, "monthly", "تقرير الوارد الشهري");
+    };
   };
   render();
 }

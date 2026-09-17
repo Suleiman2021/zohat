@@ -409,4 +409,26 @@ input.derived{background:#eef4f9;color:var(--navy);font-weight:700;cursor:not-al
   .big-print .kpi .label{font-size:10.5px;line-height:1.3}
   .big-print .kpi .val{font-size:15px;margin-top:2px}
   .big-print .invoice-sheet h2,.big-print .print-title{font-size:19px;margin:6px 0 10px}
+
+  /* ---------- طباعة متوسطة: تقارير حسابات محمود وكشوف الحساب ----------
+     أوضح من المصغّرة (9.5px) وأصغر من الفاتورة (13px)، وتتّسع لتفاصيل كثيرة */
+  .mid-print th,.mid-print td{font-size:11.5px;padding:4px 6px}
+  /* ملاحظات الإلغاء والتعديل تحت الخلية: أصغر من النص لكن مقروءة لا مجرّد أثر */
+  .mid-print .mini{font-size:9.5px;line-height:1.35}
+  /* ثلاثة أعمدة: ستّ بطاقات تملأ صفّين كاملين بلا صفّ نصفه فارغ */
+  .mid-print .kpis{grid-template-columns:repeat(3,1fr);gap:5px}
+  .mid-print .kpi{padding:5px 7px}
+  .mid-print .kpi .label{font-size:9px;line-height:1.3}
+  .mid-print .kpi .val{font-size:13px;margin-top:2px}
+  .mid-print .print-title{font-size:17px;margin:5px 0 4px}
+  .mid-print h3,.mid-print .sub{font-size:13px;margin:9px 0 4px}
+  .mid-print h4{font-size:12px;margin:8px 0 3px}
+  /* سطر الفترة/التاريخ: الوحيد الذي يُطبع من الشروح (بقيّة .hint مخفيّة) */
+  .mid-print .print-meta{display:block;font-size:10.5px;color:#444;margin:0 0 8px}
+  /* كتلة شهر أو عملة: لا تنكسر بين صفحتين ما أمكن */
+  .print-block{page-break-inside:avoid;margin-bottom:10px}
+  /* جدول تفصيلي تابع: مُزاح بحدّ جانبي يميّزه عن الجدول الأب */
+  .mid-print .print-detail{margin:2px 0 6px;padding-right:9px;border-right:2px solid #b9c7d6}
+  .mid-print .print-detail table{width:auto;min-width:55%}
+  .mid-print .print-detail h5{font-size:11px;margin:0 0 3px;color:#2a3b4d}
 }
