@@ -12,6 +12,9 @@
 html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--ink);font-size:15px;line-height:1.55}
 .hidden{display:none!important}
+/* خاصية hidden تُخفي بـ display:none من المتصفح، فيتغلّب عليها أي display نكتبه
+   (كما حدث مع .dd-menu وعرضها flex). هذا السطر يجعل الإخفاء مضموناً لكل عنصر. */
+[hidden]{display:none!important}
 .err{color:var(--warn);font-size:13px;min-height:16px}
 img,svg{max-width:100%}
 
