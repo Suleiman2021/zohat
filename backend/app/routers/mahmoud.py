@@ -1281,8 +1281,10 @@ def monthly_revenue(db: Session = Depends(get_session), user: User = Depends(adm
                                      "commission": 0, "cur": {}})
 
     def cur_slot(d: dict, c: str) -> dict:
+        # parties = مصاريف كل جهة، merchant_parties = بدل تاجر كل جهة — مفصولان
+        # لأنهما بندان مختلفان: الأول إنفاق الجهة نيابةً عنا، والثاني ما دفعناه للتاجر
         return d["cur"].setdefault(c, {"currency": c, "expenses": 0.0, "merchant": 0.0,
-                                       "parties": {}})
+                                       "parties": {}, "merchant_parties": {}})
 
     # ---- الأجور والعمولة من الشحنات الصادرة (كل شحنة تُقرَّب ثم تُجمع) ----
     for s, c, _gwc in _computed_exported(db):
@@ -1300,24 +1302,28 @@ def monthly_revenue(db: Session = Depends(get_session), user: User = Depends(adm
         if t.txn_type not in (TXN_EXPENSE, TXN_MERCHANT):
             continue
         cs = cur_slot(slot(str(t.txn_date)[:7]), _cur(t))
+        nm = names.get(t.party_id, "—")
         if t.txn_type == TXN_EXPENSE:
             cs["expenses"] += t.amount
-            nm = names.get(t.party_id, "—")
             cs["parties"][nm] = round(cs["parties"].get(nm, 0.0) + t.amount, 2)
         else:
             cs["merchant"] += t.amount
+            cs["merchant_parties"][nm] = round(cs["merchant_parties"].get(nm, 0.0) + t.amount, 2)
 
     def blocks(d: dict) -> list[dict]:
         """كتلة لكل عملة. الدولار حاضر دائماً لأنه وعاء الأجور والعمولة."""
         out = []
+        by_party = lambda m: sorted(({"name": n, "amount": v} for n, v in m.items()),
+                                    key=lambda x: -x["amount"])
         for c in [CUR_USD] + [x for x in sorted(d["cur"]) if x != CUR_USD]:
-            b = d["cur"].get(c) or {"currency": c, "expenses": 0.0, "merchant": 0.0, "parties": {}}
+            b = d["cur"].get(c) or {"currency": c, "expenses": 0.0, "merchant": 0.0,
+                                    "parties": {}, "merchant_parties": {}}
             gross = (d["fees_total"] + d["commission"]) if c == CUR_USD else 0.0
             exp, mer = round(b["expenses"], 2), round(b["merchant"], 2)
             out.append({"currency": c, "gross": gross, "expenses": exp, "merchant": mer,
                         "revenue": round(gross - exp - mer, 2),
-                        "parties": sorted(({"name": n, "amount": v} for n, v in b["parties"].items()),
-                                          key=lambda x: -x["amount"])})
+                        "parties": by_party(b["parties"]),
+                        "merchant_parties": by_party(b["merchant_parties"])})
         return out
 
     rows = [{"month": d["month"], "shipments": d["shipments"],
@@ -1336,6 +1342,8 @@ def monthly_revenue(db: Session = Depends(get_session), user: User = Depends(adm
             g["expenses"] += b["expenses"]; g["merchant"] += b["merchant"]
             for n, v in b["parties"].items():
                 g["parties"][n] = round(g["parties"].get(n, 0.0) + v, 2)
+            for n, v in b["merchant_parties"].items():
+                g["merchant_parties"][n] = round(g["merchant_parties"].get(n, 0.0) + v, 2)
     return {"rows": rows,
             "totals": {"months": len(rows), "shipments": grand["shipments"],
                        "fees_total": grand["fees_total"], "commission": grand["commission"],

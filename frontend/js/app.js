@@ -174,6 +174,12 @@ async function exportXlsx(cols, rows, view, title){
   }catch(err){ toast(err.message, true); }
 }
 
+// إغلاق أي قائمة منسدلة بالنقر خارجها أو بمفتاح Escape — مُسجَّل مرة واحدة
+// للتطبيق كله، فلا يتراكم مستمع جديد مع كل إعادة رسم لواجهة
+const closeMenus=()=>document.querySelectorAll(".dd-menu").forEach(m=>m.hidden=true);
+document.addEventListener("click", e=>{ if(!e.target.closest(".dd")) closeMenus(); });
+document.addEventListener("keydown", e=>{ if(e.key==="Escape") closeMenus(); });
+
 // طباعة باتجاه صفحة محدد: التقارير عرضية (أعمدة كثيرة) والفاتورة طولية
 function printDoc(orientation){
   const st=document.createElement("style");
@@ -1858,7 +1864,14 @@ async function mStatement(pid, fromTab, period){
   v.innerHTML=`<h1>كشف حساب: ${p.name}</h1>
     <div class="card no-print"><div class="btn-row">
       <button class="sm" id="back">← رجوع</button>
-      <button class="sm" id="pr">🖨 طباعة PDF</button>
+      <div class="dd">
+        <button class="sm" id="prBtn" aria-expanded="false">🖨 طباعة PDF ▾</button>
+        <div class="dd-menu" id="prMenu" hidden>
+          <button class="dd-item" data-scope="full">الكشف الكامل</button>
+          <button class="dd-item" data-scope="expenses">المصاريف وبدل التاجر — كلٌّ على حدة</button>
+          <button class="dd-item" data-scope="payments">الدفعات وتفاصيلها</button>
+        </div>
+      </div>
       <button class="sm" id="xl">⬇ تصدير Excel</button>
       <button class="primary" id="newTxn">＋ تسجيل عملية لهذه الجهة</button>
     </div></div>
@@ -1873,7 +1886,7 @@ async function mStatement(pid, fromTab, period){
          «الرصيد قبل/بعد» في الجدول يبقى الرصيد الجاري الحقيقي محسوباً من أول حركة
          للجهة، لا من بداية الفترة — فلا ينكسر التسلسل.`
       : "ابحث بالتاريخ لقصر الكشف والمجاميع على فترة محددة."}</p></div>
-    <div class="only-print">${brandHead()}
+    <div class="only-print" id="paHead">${brandHead()}
       <h2 class="print-title">كشف حساب: ${p.name}</h2>
       <p class="print-meta">${p.box_type} — الفترة:
         ${ranged?`${pr.date_from||"البداية"} → ${pr.date_to||"اليوم"}`:"كل الفترات"}
@@ -1908,11 +1921,61 @@ async function mStatement(pid, fromTab, period){
     ${["مكتب","زبون"].includes(p.box_type)?`<div class="card no-print">
       <h3>⚡ الاستحقاقات التلقائية من الشحنات الصادرة</h3>
       <div id="ac"><div class="loading"><div class="spinner"></div></div></div></div>`:""}
-    <div class="card"><h3>كشف الحساب مرتّباً بالتاريخ</h3><div id="lg"></div></div>`;
+    <div class="only-print" id="pa"></div>
+    <div class="card" id="lgCard"><h3>كشف الحساب مرتّباً بالتاريخ</h3><div id="lg"></div></div>`;
 
   $("#back").onclick=()=>vMahmoud(fromTab||"parties");
-  // عرضية: أعمدة الكشف اثنا عشر، فلا تتزاحم على صفحة طولية
-  $("#pr").onclick=()=>printDoc("landscape");
+
+  // ---- طباعة مُركّزة على بند واحد: تفاصيله ومجاميعه لكل عملة، مستقلاً عن الكشف ----
+  // القيود الملغاة مستبعدة كي تبقى المجاميع صحيحة، ويُذكر عددها صراحةً.
+  const liveRows=d.ledger.filter(r=>!r.is_void);
+  const voided=d.ledger.length-liveRows.length;
+  const curOf=r=>r.currency||CUR_USD;
+  const sectionOf=(type,title)=>{
+    const rows=liveRows.filter(r=>r.txn_type===type);
+    if(!rows.length) return `<div class="print-block"><h3>${title}</h3>
+      <p class="print-meta">لا توجد حركات من هذا النوع ضمن الفترة المعروضة.</p></div>`;
+    const curs=[...new Set(rows.map(curOf))];
+    return `<div class="print-block"><h3>${title} — ${rows.length} حركة</h3>
+      ${curs.map(c=>{
+        const rs=rows.filter(r=>curOf(r)===c);
+        const sum=rs.reduce((a,r)=>a+(Number(r.amount)||0),0);
+        return `${curs.length>1?`<div class="sub">بال${c}</div>`:""}
+        ${wrapTable(`<table><thead><tr><th>التاريخ</th><th>رقم</th><th>السبب/البند</th>
+          <th>التفاصيل</th><th>المبلغ</th><th>المستخدم</th><th>ملاحظات</th></tr></thead>
+          <tbody>${rs.map(r=>`<tr><td class="nowrap">${r.txn_date}</td><td>${r.id}</td>
+            <td>${r.reason||"-"}</td><td>${r.description||"-"}</td>
+            <td><b>${cmoney(r.amount,c)}</b>${iqdNote(r)}</td>
+            <td>${r.created_by||"-"}</td><td>${r.notes||"-"}</td></tr>`).join("")}
+          <tr class="total-row"><td colspan="4"><b>مجموع ${rs.length} حركة بال${c}</b></td>
+            <td><b>${cmoney(sum,c)}</b></td><td colspan="2"></td></tr>
+        </tbody></table>`)}`;
+      }).join("")}</div>`;
+  };
+  const buildPrint=scope=>`${brandHead()}
+    <h2 class="print-title">${scope==="payments"?"دفعات":"مصاريف وبدل تاجر"}: ${p.name}</h2>
+    <p class="print-meta">${p.box_type} — الفترة:
+      ${ranged?`${pr.date_from||"البداية"} → ${pr.date_to||"اليوم"}`:"كل الفترات"}.
+      ${voided?`استُبعد ${voided} قيد ملغى من الأرقام. `:""}
+      كل عملة على حدة بمجموعها. طُبع في ${new Date().toLocaleDateString("ar-EG")}</p>
+    ${scope==="expenses"
+      ? sectionOf(TXN_EXPENSE,"أولاً: المصاريف")+sectionOf(TXN_MERCHANT,"ثانياً: بدل التاجر")
+      : sectionOf(TXN_PAYMENT,"الدفعات")}`;
+  const doPrint=scope=>{
+    const focus=scope!=="full";
+    $("#pa").innerHTML = focus ? buildPrint(scope) : "";
+    $("#paHead").classList.toggle("np", focus);   // .np مخفيّ في الطباعة وحدها
+    $("#lgCard").classList.toggle("np", focus);
+    // الكشف الكامل عرضيّ (اثنا عشر عموداً)، والمُركّز طوليّ (سبعة)
+    printDoc(focus ? "portrait" : "landscape");
+  };
+  $("#prBtn").onclick=()=>{
+    const m=$("#prMenu"); m.hidden=!m.hidden;
+    $("#prBtn").setAttribute("aria-expanded", String(!m.hidden));
+  };
+  $("#prMenu").querySelectorAll("[data-scope]").forEach(b=>b.onclick=()=>{
+    $("#prMenu").hidden=true; doPrint(b.dataset.scope);
+  });
   $("#sgo").onclick=()=>mStatement(pid, fromTab,
     {date_from:$("#sdf").value, date_to:$("#sdt").value});
   $("#sclr").onclick=()=>mStatement(pid, fromTab, {date_from:"", date_to:""});
@@ -2400,6 +2463,15 @@ async function mMonthly(box, period){
     ? `من ${period.date_from||"البداية"} إلى ${period.date_to||"اليوم"}`
     : "كل الفترات (فلتر التاريخ أعلاه فارغ)";
 
+  // جدول تفصيلي على الشاشة: بند واحد (مصاريف أو بدل تاجر) موزَّعاً على الجهات
+  const scrTable=(b, list, total, title, cur)=>!list.length ? "" :
+    `<div class="sub mini">${title}</div>${wrapTable(`<table><thead><tr>
+      <th>الجهة</th><th>المبلغ</th><th>النسبة</th></tr></thead><tbody>
+      ${list.map(p=>`<tr><td>${p.name}</td><td>${cmoney(p.amount,cur)}</td>
+        <td class="mini">${total?Math.round(p.amount/total*100):0}%</td></tr>`).join("")}
+      <tr class="total-row"><td><b>المجموع</b></td>
+        <td><b>${cmoney(total,cur)}</b></td><td></td></tr></tbody></table>`)}`;
+
   // صفوف جدول عملة واحدة (الشهر، ثم أرقام تلك العملة)
   const monthRows=cur=>d.rows.map(r=>{
     const b=(r.by_currency||[]).find(c=>c.currency===cur);
@@ -2413,17 +2485,13 @@ async function mMonthly(box, period){
       <td>${cmoney(b.expenses,cur)}</td>
       <td>${cmoney(b.merchant,cur)}</td>
       <td><b class="${b.revenue<0?'neg':''}">${cmoney(b.revenue,cur)}</b></td>
-      <td class="no-print">${b.parties.length
-        ? `<button class="sm" data-det>${open.has(r.month+cur)?"إخفاء":`جهات (${b.parties.length})`}</button>`
+      <td class="no-print">${(b.parties.length||(b.merchant_parties||[]).length)
+        ? `<button class="sm" data-det>${open.has(r.month+cur)?"إخفاء":"جهات"}</button>`
         : ""}</td></tr>
       ${open.has(r.month+cur)?`<tr class="detail-row"><td colspan="${isU?9:5}">
-        ${wrapTable(`<table><thead><tr><th>الجهة</th><th>مصاريفها في ${r.month}</th>
-          <th>من إجمالي مصاريف الشهر</th></tr></thead><tbody>
-          ${b.parties.map(p=>`<tr><td>${p.name}</td><td>${cmoney(p.amount,cur)}</td>
-            <td class="mini">${b.expenses?Math.round(p.amount/b.expenses*100):0}%</td></tr>`).join("")}
-          <tr class="total-row"><td><b>المجموع</b></td>
-            <td><b>${cmoney(b.expenses,cur)}</b></td><td></td></tr>
-        </tbody></table>`)}</td></tr>`:""}`;
+        ${scrTable(b, b.parties||[], b.expenses, `مصاريف الجهات في ${r.month}`, cur)}
+        ${scrTable(b, b.merchant_parties||[], b.merchant, `بدل التاجر في ${r.month}`, cur)}
+        </td></tr>`:""}`;
   }).join("");
 
   // نسخة الطباعة: كل شهر كتلة مستقلة بتفصيل جهاته كاملاً مهما كان المطويّ على الشاشة
@@ -2440,20 +2508,23 @@ async function mMonthly(box, period){
         <td>${cmoney(b.expenses,b.currency)}</td>
         <td>${cmoney(b.merchant,b.currency)}</td>
         <td><b>${cmoney(b.revenue,b.currency)}</b></td></tr></tbody></table>`;
-    const partyTable=b=>!b.parties.length ? "" : `<div class="print-detail">
-        <h5>تفصيل مصاريف الجهات (بال${b.currency})</h5>
+    // جدولان منفصلان: المصاريف حسب الجهة، وبدل التاجر حسب الجهة — بندان مختلفان
+    const partyTable=(b, list, total, title)=>!list.length ? "" : `<div class="print-detail">
+        <h5>${title} (بال${b.currency})</h5>
         <table><thead><tr><th>الجهة</th><th>المبلغ</th><th>النسبة</th></tr></thead>
-        <tbody>${b.parties.map(p=>`<tr><td>${p.name}</td>
+        <tbody>${list.map(p=>`<tr><td>${p.name}</td>
           <td>${cmoney(p.amount,b.currency)}</td>
-          <td>${b.expenses?Math.round(p.amount/b.expenses*100):0}%</td></tr>`).join("")}
+          <td>${total?Math.round(p.amount/total*100):0}%</td></tr>`).join("")}
           <tr class="total-row"><td><b>المجموع</b></td>
-            <td><b>${cmoney(b.expenses,b.currency)}</b></td><td></td></tr>
+            <td><b>${cmoney(total,b.currency)}</b></td><td></td></tr>
         </tbody></table></div>`;
+    const details=b=>partyTable(b, b.parties||[], b.expenses, "تفصيل مصاريف الجهات")
+      + partyTable(b, b.merchant_parties||[], b.merchant, "تفصيل بدل التاجر حسب الجهة");
     const blocks=(r, head)=>`<div class="print-block"><h4>${head}</h4>
       ${(r.by_currency||[]).filter(b=>b.currency===CUR_USD
           || Math.abs(b.expenses)>0.005 || Math.abs(b.merchant)>0.005)
         .map(b=>`${(r.by_currency||[]).length>1?`<div class="sub">بال${b.currency}</div>`:""}
-          ${curTable(b, r)}${partyTable(b)}`).join("")}</div>`;
+          ${curTable(b, r)}${details(b)}`).join("")}</div>`;
     return d.rows.map(r=>blocks(r, `شهر ${r.month}`)).join("")
       + (d.rows.length>1 ? blocks(t, "إجمالي كل الأشهر") : "");
   };
@@ -2485,7 +2556,8 @@ async function mMonthly(box, period){
           <div class="val">${cmoney(tu.expenses,CUR_USD)}</div>
           <div class="mini">${tu.parties.length} جهة</div></div>
         <div class="kpi merch"><div class="label">إجمالي بدل التاجر</div>
-          <div class="val">${cmoney(tu.merchant,CUR_USD)}</div></div>
+          <div class="val">${cmoney(tu.merchant,CUR_USD)}</div>
+          <div class="mini">${(tu.merchant_parties||[]).length} جهة</div></div>
         <div class="kpi cash"><div class="label">الوارد الصافي</div>
           <div class="val ${tu.revenue<0?'neg':''}">${cmoney(tu.revenue,CUR_USD)}</div></div>
       </div>
@@ -2541,9 +2613,12 @@ async function mMonthly(box, period){
             fees:b.currency===CUR_USD?r.fees_total:"",
             commission:b.currency===CUR_USD?r.commission:"",
             gross:b.gross, expenses:b.expenses, merchant:b.merchant, revenue:b.revenue});
-          b.parties.forEach(p=>flat.push({month:label, item:"مصروف جهة: "+p.name,
+          (b.parties||[]).forEach(p=>flat.push({month:label, item:"مصروف جهة: "+p.name,
             currency:b.currency, shipments:"", fees:"", commission:"", gross:"",
             expenses:p.amount, merchant:"", revenue:""}));
+          (b.merchant_parties||[]).forEach(p=>flat.push({month:label, item:"بدل تاجر: "+p.name,
+            currency:b.currency, shipments:"", fees:"", commission:"", gross:"",
+            expenses:"", merchant:p.amount, revenue:""}));
         });
       d.rows.forEach(r=>push(r, r.month));
       if(d.rows.length>1) push(t, "الإجمالي");
