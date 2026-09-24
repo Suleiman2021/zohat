@@ -77,6 +77,32 @@ h1{font-size:22px;margin:0 0 16px;color:var(--navy)}
 @media(max-width:520px){.dd-menu{min-width:0;width:max-content;max-width:78vw}
   .dd-item{white-space:normal}}
 
+/* ---------- وصل الحاوية: على صورة الوصل الورقي ---------- */
+.receipt{background:#fff;border:2px solid #1b4fa0;border-radius:8px;padding:14px 16px;
+  max-width:760px;margin:0 auto 16px}
+.rc-top{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  border:2px solid #1b4fa0;border-radius:6px;padding:8px 12px;
+  background:linear-gradient(90deg,#eaf2ff,#fdeaf3)}
+.rc-top img{height:46px}
+.rc-co{text-align:center;line-height:1.5;color:#1b4fa0}
+.rc-co b{display:block;font-size:20px}
+.rc-co span{display:block;font-size:12px;color:#b3216b;font-weight:700}
+.rc-no{color:#d32f2f;font-weight:800;font-size:20px;margin:8px 2px 4px}
+/* حقول الترويسة: سطران في الصف على الشاشة، وسطر واحد على الجوال */
+.rc-fields{display:grid;grid-template-columns:repeat(2,1fr);gap:2px 18px;margin-bottom:10px}
+.rc-f{display:flex;align-items:baseline;gap:8px;border-bottom:1px dotted #9bb6d8;padding:4px 2px}
+.rc-f span{color:#1b4fa0;font-weight:700;font-size:12.5px;min-width:150px}
+.rc-f b{font-size:13.5px;word-break:break-word}
+.rc-items{border:1px solid #1b4fa0}
+.rc-items th{background:#1b4fa0;color:#fff;font-size:12.5px}
+.rc-items th.rc-h1{background:#c2185b}
+.rc-items td{border:1px solid #1b4fa0;font-size:13px;height:26px}
+.rc-items td.rc-label{color:#c2185b;font-weight:700;text-align:right;letter-spacing:.5px}
+.rc-items tr.rc-total td{background:#eaf2ff;font-weight:800;border-top:2px solid #1b4fa0}
+.rc-notes{font-size:12.5px;margin-top:8px}
+@media(max-width:640px){.rc-fields{grid-template-columns:1fr}
+  .rc-f span{min-width:120px}}
+
 .hint{color:var(--muted);font-size:12px;margin:6px 0 0}
 /* سطر «الأساس»: يوضّح بأيّ تاريخ وأيّ حالة رُشِّحت أرقام التبويب، كي لا تُقارَن بغير أساسها */
 .hint.basis{background:#f4f7fb;border:1px solid var(--line);border-right:3px solid var(--navy);
@@ -447,4 +473,16 @@ input.derived{background:#eef4f9;color:var(--navy);font-weight:700;cursor:not-al
   .mid-print .print-detail{margin:2px 0 6px;padding-right:9px;border-right:2px solid #b9c7d6}
   .mid-print .print-detail table{width:auto;min-width:55%}
   .mid-print .print-detail h5{font-size:11px;margin:0 0 3px;color:#2a3b4d}
+
+  /* ---------- وصل الحاوية عند الطباعة: يحافظ على ألوان الورقة ---------- */
+  .receipt{border-width:2px;padding:10px 12px;max-width:none;
+    -webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .receipt *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .rc-items th,.rc-items td{font-size:12px;padding:3px 6px;height:auto}
+  .rc-items td{height:22px}
+  .rc-f span{font-size:11.5px;min-width:130px}
+  .rc-f b{font-size:12.5px}
+  .rc-top img{height:40px}
+  .rc-co b{font-size:17px}
+  .receipt .rc-notes{display:block;font-size:11.5px}
 }

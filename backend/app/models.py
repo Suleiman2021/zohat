@@ -316,6 +316,55 @@ class MCustomsCheck(SQLModel, table=True):
     def _v_dates(cls, v): return _as_date(v)
 
 
+# ===================== سجل الحاويات =====================
+# سجل يدوي مستقل تماماً عن سجل الشحنات، على صورة وصل التخليص الورقي:
+# ترويسة بطرفَي الرحلة (العراقي والسوري)، ثم بنود المصاريف ببنودها الثابتة.
+CONTAINER_ITEMS = [
+    "كمرك عراقي", "كمرك سوري", "معاملة فارغة سيارة", "سلفة ضريبية",
+    "رسم إنفاق استهلاكي", "تصريح إلكتروني", "أجرة السيارة", "تخليص عراقي",
+    "تخليص سوري", "الشركة", "مصاريف أخرى", "عمال", "فحص",
+]
+# عملتا الوصل كما في الورقة: بالدينار أو بالدولار — ولكلٍّ مجموعها المستقل
+CONTAINER_CURRENCIES = (CUR_USD, CUR_IQD)
+
+
+class Container(SQLModel, table=True):
+    """حاوية مسجَّلة يدوياً — ترويسة الوصل."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    ref_no: int = Field(default=0, index=True)       # رقم الوصل (تسلسلي)
+    rec_date: Optional[date] = Field(default=None, index=True)
+    trader_name: str = ""                            # اسم التاجر
+    # طرفا الرحلة: لكلٍّ سائقه وسيارته وهاتفه
+    iraqi_driver: str = ""
+    syrian_driver: str = ""
+    iraqi_plate: str = ""
+    syrian_plate: str = ""
+    iraqi_phone: str = ""
+    syrian_phone: str = ""
+    from_city: str = ""                              # جهة الإرسال
+    to_city: str = ""                                # جهة الوجهة
+    notes: str = ""
+    created_by: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_by: str = ""
+    updated_at: Optional[datetime] = None
+
+    @field_validator("rec_date", mode="before")
+    @classmethod
+    def _v_date(cls, v): return _as_date(v)
+
+
+class ContainerLine(SQLModel, table=True):
+    """بند واحد من بنود الوصل — مبلغه بعملته، و«نوع/عدد» نصٌّ حر كما في الورقة."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    container_id: int = Field(index=True)
+    label: str = ""                    # اسم البند (من CONTAINER_ITEMS أو بند حر)
+    amount: float = 0.0
+    currency: str = CUR_USD            # دولار / دينار — لا تُجمع عملة بأخرى
+    kind_count: str = ""               # «نوع - عدد»
+    sort_order: int = 0
+
+
 class JournalEntry(SQLModel, table=True):
     """دفتر القيود المحاسبية (إيراد/مصروف يدوي)."""
     id: Optional[int] = Field(default=None, primary_key=True)

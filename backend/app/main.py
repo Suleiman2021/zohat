@@ -13,7 +13,8 @@ from .core.database import init_db, engine
 from .core.security import hash_pw
 from .core import config
 from .models import User, ROLE_ADMIN
-from .routers import auth, shipments, accounting, admin, settings, backup, mahmoud
+from .routers import (auth, shipments, accounting, admin, settings, backup, mahmoud,
+                      containers)
 
 # رسائل الإقلاع عربية — على ويندوز قد تكون الطرفية بترميز لا يدعم العربية (cp1256)
 # فتُسقط print الخادمَ كلياً عند البدء. نجعل المخرجات UTF-8 مع استبدال ما يتعذّر عرضه.
@@ -54,6 +55,7 @@ app.include_router(admin.router)
 app.include_router(settings.router)
 app.include_router(backup.router)
 app.include_router(mahmoud.router)
+app.include_router(containers.router)
 
 
 @app.get("/healthz")

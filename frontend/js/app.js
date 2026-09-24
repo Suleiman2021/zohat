@@ -5,14 +5,15 @@ const el = (t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=
 
 // قوائم الأدوار: أي صفحة يراها كل دور
 const MENUS = {
-  admin:      ["dashboard","shipments","customs","broker","invoice","reports","accounting","mahmoud","items","lists","printfx","users"],
-  supervisor: ["dashboard","shipments","customs","invoice","reports","accounting","mahmoud"],
+  admin:      ["dashboard","shipments","containers","customs","broker","invoice","reports","accounting","mahmoud","items","lists","printfx","users"],
+  supervisor: ["dashboard","shipments","containers","customs","invoice","reports","accounting","mahmoud"],
   accountant: ["dashboard","shipments","reports","accounting","mahmoud","invoice"],
   collector:  ["shipments","invoice"],
   broker:     ["broker"],
   branch:     ["shipments","deliver","invoice"],
 };
-const TITLES = {dashboard:"لوحة المؤشرات",shipments:"سجل الشحنات",customs:"حساب الجمارك",
+const TITLES = {dashboard:"لوحة المؤشرات",shipments:"سجل الشحنات",containers:"سجل الحاويات",
+  customs:"حساب الجمارك",
   broker:"التخليص الجمركي",invoice:"فاتورة الزبون",reports:"لوحة التقارير",accounting:"الحسابات",mahmoud:"حسابات محمود",
   items:"الأصناف",lists:"القوائم والإعدادات",printfx:"الطباعة والمعادلات",users:"المستخدمون",deliver:"التسليم والتحصيل"};
 const ROLE_LABEL = {admin:"الإدارة الشاملة", supervisor:"المشرف الإداري (صاحب الشركة)",
@@ -293,7 +294,8 @@ function route(key,link){
   // الطباعة المتوسطة تخصّ شاشات بعينها (كشف الحساب) — تُرفع عند مغادرتها
   $("#view").classList.remove("mid-print");
   $("#view").innerHTML=`<div class="loading"><div class="spinner"></div></div>`;
-  ({dashboard:vDashboard,shipments:vShipments,customs:vCustoms,broker:vBroker,invoice:vInvoice,
+  ({dashboard:vDashboard,shipments:vShipments,containers:vContainers,customs:vCustoms,
+    broker:vBroker,invoice:vInvoice,
     reports:vReports,accounting:vAccounting,mahmoud:vMahmoud,items:vItems,lists:vLists,printfx:vPrintFx,users:vUsers,deliver:vDeliver}[key])();
 }
 
@@ -1226,6 +1228,266 @@ function detailPanels(rows){
     + card("آجل — الإجمالي", withComm(byCol(DEFERRED)), "cod")
     + card("منها عمولة", sum("commission", byCol(DEFERRED))),
       "كل حالة تعرض المجموع شاملاً العمولة، ثم مقدار العمولة داخله")}`;
+}
+
+// ============================ سجل الحاويات ============================
+// سجل يدوي مستقل تماماً عن سجل الشحنات — على صورة وصل التخليص الورقي.
+// لا يمسّ الشحنات ولا حسابات محمود: إدخالٌ وعرضٌ وطباعة فقط.
+const CN_USD="دولار", CN_IQD="دينار";
+let CN_META=null;                       // بنود الوصل من الخادم (تُجلب مرة واحدة)
+// الدينار بلا كسور (لا وجود لأجزائه عملياً)، والدولار بخانتين
+const cnMoney=(v,c)=> c===CN_IQD
+  ? Math.round(Number(v)||0).toLocaleString("en")+" د.ع"
+  : (Number(v)||0).toLocaleString("en",{minimumFractionDigits:2})+" $";
+// مجموع عملة واحدة من بنود وصل
+const cnSum=(lines,c)=>(lines||[]).filter(l=>l.currency===c)
+  .reduce((a,l)=>a+(Number(l.amount)||0),0);
+
+async function cnMeta(){
+  if(!CN_META) CN_META = await API.get("/api/containers/meta");
+  return CN_META;
+}
+
+async function vContainers(){
+  const v=$("#view");
+  await cnMeta();
+  v.innerHTML=`<h1>سجل الحاويات</h1>
+    <div class="card no-print"><div class="filters">
+      <label>من تاريخ<input type="date" id="kdf"></label>
+      <label>إلى تاريخ<input type="date" id="kdt"></label>
+      <label>رقم الوصل<input id="kref" placeholder="مثال 12"></label>
+      <label>اسم التاجر<input id="ktr" placeholder="اسم جزئي"></label>
+      <label>السائق (أي طرف)<input id="kdrv" placeholder="عراقي أو سوري"></label>
+      <label>رقم السيارة (أي طرف)<input id="kpl" placeholder="جزئي"></label>
+      <label>رقم الموبايل (أي طرف)<input id="kph" placeholder="جزئي"></label>
+      <label>جهة الإرسال<select id="kfc">${optsWithAll(CITIES)}</select></label>
+      <label>جهة الوجهة<select id="ktc">${optsWithAll(CITIES)}</select></label>
+      <button class="sm" id="kclr">مسح الفلاتر</button>
+      <button class="sm" id="kxl">⬇ تصدير Excel</button>
+      <button class="primary" id="knew">＋ حاوية جديدة</button>
+    </div>
+    <p class="hint">سجل مستقل عن الشحنات، يُدخَل يدوياً. البحث بالسائق أو السيارة
+      أو الموبايل يطابق <b>أيّاً من الطرفين</b> العراقي أو السوري.
+      الدولار والدينار لا يُجمعان — لكلٍّ مجموعه.</p></div>
+    <div class="card"><div id="ktbl"></div></div>`;
+
+  const kst = viewState("containers", {f:{}});
+  const FIDS=["kdf","kdt","kref","ktr","kdrv","kpl","kph","kfc","ktc"];
+  const saveKF = bindFilters(FIDS, kst.f);
+  let rows=[];
+
+  const load=async()=>{
+    saveKF();
+    const p={date_from:$("#kdf").value, date_to:$("#kdt").value, ref:$("#kref").value,
+             trader:$("#ktr").value, driver:$("#kdrv").value, plate:$("#kpl").value,
+             phone:$("#kph").value, from_city:$("#kfc").value, to_city:$("#ktc").value};
+    rows=await API.get("/api/containers", p);
+    paint();
+  };
+  const paint=()=>{
+    if(!rows.length){ $("#ktbl").innerHTML=empty("لا توجد حاويات مطابقة"); return; }
+    $("#ktbl").innerHTML=wrapTable(`<table><thead><tr>
+        <th>رقم الوصل</th><th>التاريخ</th><th>التاجر</th>
+        <th>السائق العراقي</th><th>السائق السوري</th>
+        <th>السيارة العراقية</th><th>السيارة السورية</th>
+        <th>من → إلى</th><th>المجموع بالدولار</th><th>المجموع بالدينار</th>
+        <th class="no-print"></th></tr></thead>
+      <tbody>${rows.map(r=>`<tr>
+        <td><b>${r.ref_no}</b></td><td class="nowrap">${r.rec_date||"—"}</td>
+        <td>${r.trader_name||"—"}</td>
+        <td>${r.iraqi_driver||"—"}</td><td>${r.syrian_driver||"—"}</td>
+        <td>${r.iraqi_plate||"—"}</td><td>${r.syrian_plate||"—"}</td>
+        <td class="nowrap">${r.from_city||"—"} → ${r.to_city||"—"}</td>
+        <td>${cnMoney(cnSum(r.lines,CN_USD),CN_USD)}</td>
+        <td>${cnMoney(cnSum(r.lines,CN_IQD),CN_IQD)}</td>
+        <td class="no-print nowrap">
+          <button class="sm primary" data-rc="${r.id}">🖨 الوصل</button>
+          <button class="sm" data-ed="${r.id}">تعديل</button>
+          <button class="sm danger" data-dl="${r.id}">🗑 حذف</button></td>
+      </tr>`).join("")}</tbody></table>`);
+    $("#ktbl").querySelectorAll("[data-rc]").forEach(b=>b.onclick=()=>
+      cnReceipt(Number(b.dataset.rc)));
+    $("#ktbl").querySelectorAll("[data-ed]").forEach(b=>b.onclick=()=>
+      cnForm(rows.find(x=>x.id===Number(b.dataset.ed))));
+    $("#ktbl").querySelectorAll("[data-dl]").forEach(b=>b.onclick=async()=>{
+      const r=rows.find(x=>x.id===Number(b.dataset.dl));
+      if(!confirm(`حذف الوصل رقم ${r.ref_no} نهائياً مع كل بنوده؟`)) return;
+      try{ await API.del("/api/containers/"+r.id); toast("حُذف الوصل"); load(); }
+      catch(err){ toast(err.message, true); }
+    });
+  };
+
+  liveFilters(FIDS, load);
+  $("#kclr").onclick=()=>{ FIDS.forEach(id=>$("#"+id).value=""); saveKF(); load(); };
+  $("#knew").onclick=()=>cnForm(null);
+  $("#kxl").onclick=()=>exportXlsx([
+      ["ref_no","رقم الوصل",r=>r.ref_no],["rec_date","التاريخ",r=>r.rec_date||""],
+      ["trader_name","اسم التاجر",r=>r.trader_name||""],
+      ["iraqi_driver","السائق العراقي",r=>r.iraqi_driver||""],
+      ["syrian_driver","السائق السوري",r=>r.syrian_driver||""],
+      ["iraqi_plate","رقم السيارة العراقي",r=>r.iraqi_plate||""],
+      ["syrian_plate","رقم السيارة السوري",r=>r.syrian_plate||""],
+      ["iraqi_phone","الموبايل العراقي",r=>r.iraqi_phone||""],
+      ["syrian_phone","الموبايل السوري",r=>r.syrian_phone||""],
+      ["from_city","جهة الإرسال",r=>r.from_city||""],
+      ["to_city","جهة الوجهة",r=>r.to_city||""],
+      ["usd","المجموع بالدولار",r=>cnSum(r.lines,CN_USD)],
+      ["iqd","المجموع بالدينار",r=>cnSum(r.lines,CN_IQD)],
+      ["notes","ملاحظات",r=>r.notes||""],
+    ], rows, "containers", "سجل الحاويات");
+  load();
+}
+
+// ------------- نموذج إدخال/تعديل وصل حاوية -------------
+async function cnForm(rec){
+  const v=$("#view");
+  const meta=await cnMeta();
+  const isEdit=!!rec;
+  // بنود الوصل: البنود الثابتة دائماً بترتيبها، ومعها أي بند حر سبق حفظه
+  const saved=new Map((rec?.lines||[]).map(l=>[l.label, l]));
+  const labels=[...meta.items, ...(rec?.lines||[]).map(l=>l.label)
+    .filter(l=>!meta.items.includes(l))];
+  const fld=(id,lbl,val="",type="text")=>`<label>${lbl}
+    <input id="${id}" type="${type}" value="${val||""}"></label>`;
+
+  v.innerHTML=`<h1>${isEdit?`تعديل وصل الحاوية رقم ${rec.ref_no}`:"وصل حاوية جديد"}</h1>
+    <div class="card"><div class="btn-row">
+      <button class="sm" id="kback">← رجوع</button>
+      <button class="primary" id="ksave">💾 حفظ</button>
+    </div></div>
+    <div class="card"><h3>بيانات الوصل</h3>
+      <div class="filters">
+        ${fld("f_date","التاريخ", rec?.rec_date||new Date().toISOString().slice(0,10),"date")}
+        ${fld("f_trader","اسم التاجر", rec?.trader_name)}
+        <label>جهة الإرسال<select id="f_from">${optsWithAll(CITIES, rec?.from_city)}</select></label>
+        <label>جهة الوجهة<select id="f_to">${optsWithAll(CITIES, rec?.to_city)}</select></label>
+      </div>
+      <h3 class="sub">الطرف العراقي</h3>
+      <div class="filters">
+        ${fld("f_idrv","اسم السائق العراقي", rec?.iraqi_driver)}
+        ${fld("f_ipl","رقم السيارة العراقي", rec?.iraqi_plate)}
+        ${fld("f_iph","رقم الموبايل العراقي", rec?.iraqi_phone)}
+      </div>
+      <h3 class="sub">الطرف السوري</h3>
+      <div class="filters">
+        ${fld("f_sdrv","اسم السائق السوري", rec?.syrian_driver)}
+        ${fld("f_spl","رقم السيارة السوري", rec?.syrian_plate)}
+        ${fld("f_sph","رقم الموبايل السوري", rec?.syrian_phone)}
+      </div>
+      ${fld("f_notes","ملاحظات", rec?.notes)}
+    </div>
+    <div class="card"><h3>التفاصيل</h3>
+      <p class="hint">اترك السطر فارغاً إن لم يُستعمل — لا يُحفظ. لكل بند عملته،
+        والمجموع يُحسب لكل عملة على حدة.</p>
+      ${wrapTable(`<table><thead><tr><th>التفاصيل</th><th>المبلغ</th>
+          <th>العملة</th><th>نوع - عدد</th></tr></thead>
+        <tbody>${labels.map((lb,i)=>{
+          const s=saved.get(lb)||{};
+          return `<tr data-i="${i}"><td class="nowrap rc-label">${lb}</td>
+            <td><input class="cell-in" type="number" step="0.01" min="0" data-amt
+              value="${s.amount||""}" placeholder="0"></td>
+            <td><select class="cell-in" data-cur>
+              ${meta.currencies.map(c=>`<option ${c===(s.currency||CN_USD)?"selected":""}>${c}</option>`).join("")}
+            </select></td>
+            <td><input class="cell-in" data-kc value="${(s.kind_count||"").replace(/"/g,"&quot;")}"
+              placeholder="نوع / عدد"></td></tr>`;
+        }).join("")}
+        <tr class="total-row"><td><b>المجموع الكلي</b></td>
+          <td colspan="3"><b id="ktot">—</b></td></tr>
+        </tbody></table>`)}
+    </div>`;
+
+  const gather=()=>[...v.querySelectorAll("tbody tr[data-i]")].map((tr,i)=>({
+    label: tr.querySelector(".rc-label").textContent.trim(),
+    amount: Number(tr.querySelector("[data-amt]").value)||0,
+    currency: tr.querySelector("[data-cur]").value,
+    kind_count: tr.querySelector("[data-kc]").value.trim(),
+    sort_order: i}));
+  const retotal=()=>{
+    const ls=gather();
+    $("#ktot").textContent = `${cnMoney(cnSum(ls,CN_USD),CN_USD)}   |   `
+      + cnMoney(cnSum(ls,CN_IQD),CN_IQD);
+  };
+  v.querySelectorAll("[data-amt],[data-cur]").forEach(e=>{
+    e.oninput=retotal; e.onchange=retotal; });
+  retotal();
+
+  $("#kback").onclick=()=>vContainers();
+  $("#ksave").onclick=async()=>{
+    const body={rec_date:$("#f_date").value, trader_name:$("#f_trader").value,
+      from_city:$("#f_from").value, to_city:$("#f_to").value,
+      iraqi_driver:$("#f_idrv").value, iraqi_plate:$("#f_ipl").value,
+      iraqi_phone:$("#f_iph").value, syrian_driver:$("#f_sdrv").value,
+      syrian_plate:$("#f_spl").value, syrian_phone:$("#f_sph").value,
+      notes:$("#f_notes").value, lines:gather()};
+    try{
+      const saved = isEdit ? await API.put("/api/containers/"+rec.id, body)
+                           : await API.post("/api/containers", body);
+      toast(isEdit?"حُفظ التعديل":`سُجّل الوصل رقم ${saved.ref_no}`);
+      cnReceipt(saved.id);
+    }catch(err){ toast(err.message, true); }
+  };
+}
+
+// ------------- الوصل: عرض على صورة الورقة وطباعته -------------
+async function cnReceipt(id){
+  const v=$("#view");
+  v.innerHTML=`<div class="loading"><div class="spinner"></div></div>`;
+  const r=await API.get("/api/containers/"+id);
+  const meta=await cnMeta();
+  const logo=COMPANY.logo||"icons/logo.svg";
+  // الوصل يُطبع ببنوده الثابتة كلها كالورقة — الفارغة تبقى أسطراً خالية،
+  // ويُضاف إليها أي بند حر محفوظ. هكذا يخرج بنفس شكل الدفتر الورقي.
+  const saved=new Map((r.lines||[]).map(l=>[l.label,l]));
+  const shown=[...meta.items, ...(r.lines||[]).map(l=>l.label)
+    .filter(l=>!meta.items.includes(l))]
+    .map(lb=>({label:lb, ...(saved.get(lb)||{})}));
+  const f=(lbl,val)=>`<div class="rc-f"><span>${lbl}</span><b>${val||""}</b></div>`;
+  const usd=cnSum(r.lines,CN_USD), iqd=cnSum(r.lines,CN_IQD);
+
+  v.innerHTML=`<h1 class="no-print">وصل الحاوية رقم ${r.ref_no}</h1>
+    <div class="card no-print"><div class="btn-row">
+      <button class="sm" id="kback">← رجوع</button>
+      <button class="sm" id="kedit">تعديل</button>
+      <button class="primary" id="kprint">🖨 طباعة الوصل</button>
+    </div></div>
+    <div class="receipt">
+      <div class="rc-top">
+        <img src="${logo}" alt="">
+        <div class="rc-co"><b>${COMPANY.name||"زوهات"}</b>
+          <span>للتخليص الكمركي</span>
+          ${COMPANY.phone?`<span>Tel : ${COMPANY.phone}</span>`:""}</div>
+        <img src="${logo}" alt="">
+      </div>
+      <div class="rc-no">${r.ref_no}</div>
+      <div class="rc-fields">
+        ${f("التاريخ", r.rec_date)}
+        ${f("اسم التاجر", r.trader_name)}
+        ${f("اسم السائق العراقي", r.iraqi_driver)}
+        ${f("اسم السائق السوري", r.syrian_driver)}
+        ${f("رقم السيارة العراقي", r.iraqi_plate)}
+        ${f("رقم السيارة السوري", r.syrian_plate)}
+        ${f("رقم الموبايل العراقي", r.iraqi_phone)}
+        ${f("رقم الموبايل السوري", r.syrian_phone)}
+        ${f("جهة الإرسال", r.from_city)}
+        ${f("جهة الوجهة", r.to_city)}
+      </div>
+      <table class="rc-items"><thead><tr>
+        <th class="rc-h1">التفاصيل</th><th>المبلغ ( بالدينار - بالدولار )</th>
+        <th>نوع - عدد</th></tr></thead>
+      <tbody>${shown.map(l=>`<tr>
+        <td class="rc-label">${l.label}</td>
+        <td>${l.amount?cnMoney(l.amount,l.currency):""}</td>
+        <td>${l.kind_count||""}</td></tr>`).join("")}
+        <tr class="rc-total"><td class="rc-label">المجموع الكلي</td>
+          <td>${usd?cnMoney(usd,CN_USD):""}${usd&&iqd?" + ":""}${iqd?cnMoney(iqd,CN_IQD):""}
+            ${!usd&&!iqd?"—":""}</td><td></td></tr>
+      </tbody></table>
+      ${r.notes?`<p class="rc-notes"><b>ملاحظات:</b> ${r.notes}</p>`:""}
+    </div>`;
+  $("#kback").onclick=()=>vContainers();
+  $("#kedit").onclick=()=>cnForm(r);
+  $("#kprint").onclick=()=>printDoc("portrait");
 }
 
 // ---------- لوحة التقارير ----------
