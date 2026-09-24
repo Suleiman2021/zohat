@@ -1,13 +1,13 @@
 """سجل الحاويات — سجل يدوي مستقل تماماً عن سجل الشحنات.
 
 على صورة وصل التخليص الورقي: ترويسة تحمل طرفَي الرحلة (سائق وسيارة وهاتف
-لكلٍّ من الجانب العراقي والسوري) واسم التاجر وجهتي الإرسال والوجهة، ثم بنود
-المصاريف الثابتة، لكل بند مبلغه بعملته (دولار أو دينار) و«نوع - عدد».
+لكلٍّ من الجانب العراقي والسوري) واسم التاجر وجهتي الإرسال والوجهة وبيانات
+الحمولة (الوزن والعدد والأصناف)، ثم بنود المصاريف الثابتة، لكل بند مبلغه
+بعملته (دولار أو دينار).
 
 لا يمسّ هذا السجل الشحنات ولا حسابات محمود ولا أي رصيد — إدخالٌ وعرضٌ وطباعة.
 العملتان لا تُجمعان أبداً: لكلٍّ مجموعها المستقل، كبقية النظام.
 """
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
@@ -16,7 +16,7 @@ from sqlmodel import Session, String, select
 from ..core.database import get_session
 from ..core.security import admin_or_supervisor
 from ..models import (User, Container, ContainerLine, CONTAINER_ITEMS,
-                      CONTAINER_CURRENCIES, CUR_USD, _as_date)
+                      CONTAINER_CURRENCIES, CUR_USD, utcnow, _as_date)
 
 router = APIRouter(prefix="/api/containers", tags=["containers"])
 
@@ -24,7 +24,7 @@ router = APIRouter(prefix="/api/containers", tags=["containers"])
 # الإنشاء يديرها النظام وحده — بدون هذا الفصل يستطيع طلبٌ عادي تزوير الرقم.
 _TEXT_FIELDS = ("trader_name", "iraqi_driver", "syrian_driver", "iraqi_plate",
                 "syrian_plate", "iraqi_phone", "syrian_phone", "from_city",
-                "to_city", "notes")
+                "to_city", "items_desc", "notes")
 
 
 def _amount(raw, label: str) -> float:
@@ -36,6 +36,19 @@ def _amount(raw, label: str) -> float:
     except (TypeError, ValueError):
         raise HTTPException(400, f"قيمة «{label}» غير صحيحة")
     if v != v or v < 0:                      # v != v يلتقط NaN
+        raise HTTPException(400, f"قيمة «{label}» لا تكون سالبة")
+    return v
+
+
+def _count(raw, label: str) -> int:
+    """العدد صحيح موجب — الكسر فيه لا معنى له."""
+    if raw in (None, ""):
+        return 0
+    try:
+        v = int(float(raw))
+    except (TypeError, ValueError):
+        raise HTTPException(400, f"قيمة «{label}» غير صحيحة")
+    if v < 0:
         raise HTTPException(400, f"قيمة «{label}» لا تكون سالبة")
     return v
 
@@ -58,7 +71,7 @@ def _out(c: Container, lines) -> dict:
     return {**c.dict(),
             "rec_date": str(c.rec_date) if c.rec_date else "",
             "lines": [{"label": ln.label, "amount": ln.amount,
-                       "currency": ln.currency, "kind_count": ln.kind_count,
+                       "currency": ln.currency,
                        "sort_order": ln.sort_order} for ln in lines],
             "totals": _totals(lines)}
 
@@ -80,12 +93,10 @@ def _parse_lines(payload_lines) -> list[dict]:
         if cur not in CONTAINER_CURRENCIES:
             raise HTTPException(400, f"عملة غير معروفة: {cur}")
         amount = _amount(raw.get("amount"), label)
-        kind = str(raw.get("kind_count") or "").strip()
-        # بند بلا مبلغ ولا «نوع/عدد» لا يُحفظ — الورقة تُترك سطوره فارغة عادةً
-        if not amount and not kind:
+        if not amount:      # بند بلا مبلغ لا يُحفظ — سطوره تُترك فارغة في الورقة
             continue
         out.append({"label": label, "amount": amount, "currency": cur,
-                    "kind_count": kind, "sort_order": i})
+                    "sort_order": i})
     return out
 
 
@@ -154,6 +165,8 @@ def create_container(payload: dict = Body(...), db: Session = Depends(get_sessio
                   created_by=user.full_name or user.username)
     for f in _TEXT_FIELDS:
         setattr(c, f, str(payload.get(f) or "").strip())
+    c.weight_kg = _amount(payload.get("weight_kg"), "الوزن")
+    c.pieces = _count(payload.get("pieces"), "العدد")
     db.add(c); db.commit(); db.refresh(c)
     _dedupe_ref_no(db, c)
     _replace_lines(db, c.id, lines)
@@ -183,13 +196,17 @@ def update_container(cid: int, payload: dict = Body(...),
         raise HTTPException(404, "الحاوية غير موجودة")
     # التحقّق أولاً: بند خاطئ يجب ألّا يغيّر الترويسة ثم يفشل، فيبقى الوصل نصف معدَّل
     lines = _parse_lines(payload.get("lines")) if "lines" in payload else None
+    weight = _amount(payload.get("weight_kg"), "الوزن") if "weight_kg" in payload else None
+    pieces = _count(payload.get("pieces"), "العدد") if "pieces" in payload else None
     if "rec_date" in payload:
         c.rec_date = _as_date(payload.get("rec_date"))
     for f in _TEXT_FIELDS:
         if f in payload:
             setattr(c, f, str(payload.get(f) or "").strip())
+    if weight is not None: c.weight_kg = weight
+    if pieces is not None: c.pieces = pieces
     c.updated_by = user.full_name or user.username
-    c.updated_at = datetime.utcnow()
+    c.updated_at = utcnow()
     db.add(c)
     if lines is not None:
         _replace_lines(db, c.id, lines)

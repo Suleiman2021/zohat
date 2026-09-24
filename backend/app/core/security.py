@@ -1,5 +1,4 @@
 """المصادقة والصلاحيات (JWT + RBAC)."""
-from datetime import datetime
 import jwt
 import bcrypt
 from fastapi import Depends, HTTPException, status
@@ -8,7 +7,7 @@ from sqlmodel import Session, select
 
 from .config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE
 from .database import get_session
-from ..models import (User, ROLE_ADMIN, ROLE_SUPERVISOR, ROLE_ACCOUNTANT,
+from ..models import (User, utcnow, ROLE_ADMIN, ROLE_SUPERVISOR, ROLE_ACCOUNTANT,
                       ROLE_COLLECTOR, ROLE_BRANCH, ALL_ROLES)
 
 oauth2 = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
@@ -26,7 +25,7 @@ def verify_pw(p: str, h: str) -> bool:
 
 def make_token(user: User) -> str:
     payload = {"sub": user.username, "role": user.role, "branch": user.branch,
-               "exp": datetime.utcnow() + ACCESS_TOKEN_EXPIRE}
+               "exp": utcnow() + ACCESS_TOKEN_EXPIRE}
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 

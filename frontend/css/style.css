@@ -92,6 +92,8 @@ h1{font-size:22px;margin:0 0 16px;color:var(--navy)}
 .rc-fields{display:grid;grid-template-columns:repeat(2,1fr);gap:2px 18px;margin-bottom:10px}
 .rc-f{display:flex;align-items:baseline;gap:8px;border-bottom:1px dotted #9bb6d8;padding:4px 2px}
 .rc-f span{color:#1b4fa0;font-weight:700;font-size:12.5px;min-width:150px}
+/* الأصناف قد تكون سطراً طويلاً — تأخذ عرض الوصل كاملاً */
+.rc-wide{margin-bottom:10px}
 .rc-f b{font-size:13.5px;word-break:break-word}
 .rc-items{border:1px solid #1b4fa0}
 .rc-items th{background:#1b4fa0;color:#fff;font-size:12.5px}

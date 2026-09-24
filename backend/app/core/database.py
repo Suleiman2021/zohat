@@ -69,11 +69,18 @@ _MIGRATIONS = {
     "mentry": [
         ("migrated", "INTEGER DEFAULT 0"),
     ],
+    # بيانات الحمولة أُضيفت بعد إنشاء الجدول في الإنتاج
+    "container": [
+        ("weight_kg", "FLOAT DEFAULT 0"),
+        ("pieces", "INTEGER DEFAULT 0"),
+        ("items_desc", "TEXT DEFAULT ''"),
+    ],
 }
 
 # أعمدة قديمة تُحذف (استُبدلت بأخرى) — تجاهل الخطأ إن كانت محذوفة أصلاً
 _DROP_COLUMNS = {
     "shipment": ["iraqi_duty"],   # استُبدل بـ iraqi_per_ton (يُحسب الفعلي تلقائياً)
+    "containerline": ["kind_count"],   # عمود «نوع - عدد» أُلغي من الوصل
 }
 
 

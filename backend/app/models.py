@@ -1,8 +1,20 @@
 """نماذج قاعدة البيانات — تقابل أوراق الإكسل."""
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 from sqlmodel import SQLModel, Field
 from pydantic import field_validator
+
+
+def utcnow() -> datetime:
+    """الوقت الآن بالتوقيت العالمي **مع منطقة زمنية**.
+
+    datetime.utcnow() يعطي وقتاً «ساذجاً» بلا منطقة زمنية. إصدارات أحدث من
+    طبقة قاعدة البيانات ترفض تخزينه في PostgreSQL برسالة:
+    «Datetime values must have timezone information» — فيفشل الحفظ في الإنتاج
+    بينما يمرّ محلياً على SQLite. هذه الدالة تجعل الوقت صحيحاً في الحالتين،
+    وهي المصدر الوحيد لوقت الإنشاء والتعديل في كل الجداول.
+    """
+    return datetime.now(timezone.utc)
 
 
 def _as_date(v):
@@ -53,7 +65,7 @@ class Shipment(SQLModel, table=True):
     """سجل الشحنات + الجمركة + التسليم/التحصيل (كلها في كيان واحد)."""
     id: Optional[int] = Field(default=None, primary_key=True)
     ref_no: int = Field(index=True)                 # رقم القيد
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow)
     ship_date: date
 
     # الطرفان
@@ -135,7 +147,7 @@ class CalcVersion(SQLModel, table=True):
     كل شحنة تُثبَّت على النسخة السارية وقت تسجيلها، فتعديل أي معادلة لاحقاً
     لا يغيّر أرقام الشحنات السابقة — يسري على الشحنات الجديدة فقط."""
     id: Optional[int] = Field(default=None, primary_key=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow)
     created_by: str = ""
     payload: str = ""     # JSON: الثوابت + الشرائح + المعادلات
 
@@ -179,7 +191,7 @@ class MBox(SQLModel, table=True):
     notes: str = ""
     is_active: bool = True
     allow_credit: bool = False      # السماح برصيد دائن (دفعات تتجاوز المستحق)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow)
 
 
 class MEntry(SQLModel, table=True):
@@ -196,7 +208,7 @@ class MEntry(SQLModel, table=True):
     ref_no: str = ""
     notes: str = ""
     created_by: str = ""
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow)
     migrated: bool = False          # رُحِّلت إلى دفتر الأستاذ الجديد؟
 
     @field_validator("entry_date", mode="before")
@@ -242,7 +254,7 @@ class MTxn(SQLModel, table=True):
     notes: str = ""
 
     created_by: str = ""
-    created_at: datetime = Field(default_factory=datetime.utcnow)   # التاريخ والوقت
+    created_at: datetime = Field(default_factory=utcnow)   # التاريخ والوقت
 
     is_void: bool = False                      # ملغاة؟ تُستثنى من الرصيد ويبقى سجلها
     void_reason: str = ""
@@ -271,7 +283,7 @@ class MFxRate(SQLModel, table=True):
     iqd_per_usd: float                         # كم ديناراً = 1 دولار
     notes: str = ""
     set_by: str = ""
-    set_at: datetime = Field(default_factory=datetime.utcnow)
+    set_at: datetime = Field(default_factory=utcnow)
 
 
 class MTxnAudit(SQLModel, table=True):
@@ -281,7 +293,7 @@ class MTxnAudit(SQLModel, table=True):
     action: str = "تعديل"                      # تعديل / إلغاء
     changes: str = ""                          # JSON بالقيم قبل وبعد
     by_user: str = ""
-    at: datetime = Field(default_factory=datetime.utcnow)
+    at: datetime = Field(default_factory=utcnow)
 
 
 class MExportRevenue(SQLModel, table=True):
@@ -309,7 +321,7 @@ class MCustomsCheck(SQLModel, table=True):
     manual_iraqi: float = 0.0       # مجموع الرسم الجمركي العراقي (يدوي)
     notes: str = ""
     created_by: str = ""
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow)
 
     @field_validator("date_from", "date_to", mode="before")
     @classmethod
@@ -343,9 +355,13 @@ class Container(SQLModel, table=True):
     syrian_phone: str = ""
     from_city: str = ""                              # جهة الإرسال
     to_city: str = ""                                # جهة الوجهة
+    # بيانات الحمولة — تُدخَل يدوياً ولا تُشتقّ من أي سجل آخر
+    weight_kg: float = 0.0                           # الوزن
+    pieces: int = 0                                  # العدد
+    items_desc: str = ""                             # الأصناف
     notes: str = ""
     created_by: str = ""
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow)
     updated_by: str = ""
     updated_at: Optional[datetime] = None
 
@@ -355,13 +371,12 @@ class Container(SQLModel, table=True):
 
 
 class ContainerLine(SQLModel, table=True):
-    """بند واحد من بنود الوصل — مبلغه بعملته، و«نوع/عدد» نصٌّ حر كما في الورقة."""
+    """بند واحد من بنود الوصل — مبلغه بعملته."""
     id: Optional[int] = Field(default=None, primary_key=True)
     container_id: int = Field(index=True)
     label: str = ""                    # اسم البند (من CONTAINER_ITEMS أو بند حر)
     amount: float = 0.0
     currency: str = CUR_USD            # دولار / دينار — لا تُجمع عملة بأخرى
-    kind_count: str = ""               # «نوع - عدد»
     sort_order: int = 0
 
 

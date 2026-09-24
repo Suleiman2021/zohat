@@ -21,7 +21,7 @@ from sqlmodel import Session, select
 from ..core.database import get_session
 from ..core.security import admin_or_accountant
 from ..models import (User, MBox, MEntry, MTxn, MTxnAudit, MCustomsCheck, MExportRevenue,
-                      MFxRate, Shipment, Item,
+                      MFxRate, Shipment, Item, utcnow,
                       BOX_TYPES, BOX_OFFICE, BOX_CUSTOMER,
                       TXN_TYPES, TXN_CHARGE, TXN_PAYMENT, TXN_EXPENSE, TXN_MERCHANT,
                       CHARGE_REASONS, CURRENCIES, CUR_USD, CUR_IQD, _as_date)
@@ -388,7 +388,7 @@ def edit_txn(tid: int, patch: dict, db: Session = Depends(get_session),
         return _txn_out(t, "")
     t.edited_count += 1
     t.edited_by = user.full_name or user.username
-    t.edited_at = datetime.utcnow()
+    t.edited_at = utcnow()
     _audit(db, t.id, "تعديل", changed, user)
     db.add(t); db.commit(); db.refresh(t)
     party = db.get(MBox, t.party_id)
@@ -408,7 +408,7 @@ def void_txn(tid: int, payload: dict | None = None, db: Session = Depends(get_se
     t.is_void = True
     t.void_reason = ((payload or {}).get("reason") or "").strip()
     t.voided_by = user.full_name or user.username
-    t.voided_at = datetime.utcnow()
+    t.voided_at = utcnow()
     _audit(db, t.id, "إلغاء", {"سبب الإلغاء": t.void_reason,
                                 "النوع": t.txn_type, "المبلغ": t.amount}, user)
     db.add(t); db.commit(); db.refresh(t)
@@ -635,7 +635,7 @@ def debts_report(db: Session = Depends(get_session), user: User = Depends(admin_
                                   "count": sum(1 for r in rec if r["aging"] == lbl)}
                                  for lbl, _ in _AGING]})
     return {"as_of": str(as_of_date),
-            "generated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
+            "generated_at": utcnow().strftime("%Y-%m-%d %H:%M"),
             "owed_to_us": owed_to_us, "owed_by_us": owed_by_us, "totals": totals,
             "aging_buckets": [lbl for lbl, _ in _AGING]}
 
@@ -817,7 +817,7 @@ def _void(db: Session, txn: MTxn, reason: str, user) -> float:
     txn.is_void = True
     txn.void_reason = reason
     txn.voided_by = who
-    txn.voided_at = datetime.utcnow()
+    txn.voided_at = utcnow()
     _audit(db, txn.id, "إلغاء", {"السبب": reason, "المبلغ": old_amount}, user)
     db.add(txn)
     return old_amount
@@ -1256,7 +1256,7 @@ def save_export_revenue(export_date: str, payload: dict,
     r.majed_expense = majed
     r.notes = (payload.get("notes") or "").strip()
     r.updated_by = user.full_name or user.username
-    r.updated_at = datetime.utcnow()
+    r.updated_at = utcnow()
     db.add(r); db.commit(); db.refresh(r)
     return r
 

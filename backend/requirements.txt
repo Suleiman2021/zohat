@@ -1,9 +1,15 @@
-fastapi
-uvicorn[standard]
-sqlmodel
-pyjwt
-bcrypt
-python-multipart
-openpyxl
-requests
-psycopg2-binary
+# الإصدارات مثبَّتة عمداً: بدونها تجلب كل إعادة نشر أحدث إصدار من كل مكتبة،
+# فيتغيّر سلوك النظام في الإنتاج دون أي تعديل في الشيفرة ودون اختبار. وقد حدث
+# ذلك فعلاً: إصدار أحدث رفض التواريخ بلا منطقة زمنية فتعطّل الحفظ في الإنتاج
+# بينما كان يعمل محلياً. هذه هي الإصدارات التي تُختبر عليها كل تعديل.
+fastapi==0.139.0
+uvicorn[standard]==0.51.0
+sqlmodel==0.0.39
+SQLAlchemy==2.0.51
+pydantic==2.13.4
+pyjwt==2.13.0
+bcrypt==5.0.0
+python-multipart==0.0.32
+openpyxl==3.1.5
+requests==2.34.2
+psycopg2-binary==2.9.10

@@ -1291,7 +1291,8 @@ async function vContainers(){
         <th>رقم الوصل</th><th>التاريخ</th><th>التاجر</th>
         <th>السائق العراقي</th><th>السائق السوري</th>
         <th>السيارة العراقية</th><th>السيارة السورية</th>
-        <th>من → إلى</th><th>المجموع بالدولار</th><th>المجموع بالدينار</th>
+        <th>من → إلى</th><th>الوزن</th><th>العدد</th><th>الأصناف</th>
+        <th>المجموع بالدولار</th><th>المجموع بالدينار</th>
         <th class="no-print"></th></tr></thead>
       <tbody>${rows.map(r=>`<tr>
         <td><b>${r.ref_no}</b></td><td class="nowrap">${r.rec_date||"—"}</td>
@@ -1299,6 +1300,8 @@ async function vContainers(){
         <td>${r.iraqi_driver||"—"}</td><td>${r.syrian_driver||"—"}</td>
         <td>${r.iraqi_plate||"—"}</td><td>${r.syrian_plate||"—"}</td>
         <td class="nowrap">${r.from_city||"—"} → ${r.to_city||"—"}</td>
+        <td>${r.weight_kg?Number(r.weight_kg).toLocaleString("en")+" كغ":"—"}</td>
+        <td>${r.pieces||"—"}</td><td>${r.items_desc||"—"}</td>
         <td>${cnMoney(cnSum(r.lines,CN_USD),CN_USD)}</td>
         <td>${cnMoney(cnSum(r.lines,CN_IQD),CN_IQD)}</td>
         <td class="no-print nowrap">
@@ -1332,6 +1335,9 @@ async function vContainers(){
       ["syrian_phone","الموبايل السوري",r=>r.syrian_phone||""],
       ["from_city","جهة الإرسال",r=>r.from_city||""],
       ["to_city","جهة الوجهة",r=>r.to_city||""],
+      ["weight_kg","الوزن (كغ)",r=>r.weight_kg||0],
+      ["pieces","العدد",r=>r.pieces||0],
+      ["items_desc","الأصناف",r=>r.items_desc||""],
       ["usd","المجموع بالدولار",r=>cnSum(r.lines,CN_USD)],
       ["iqd","المجموع بالدينار",r=>cnSum(r.lines,CN_IQD)],
       ["notes","ملاحظات",r=>r.notes||""],
@@ -1363,6 +1369,12 @@ async function cnForm(rec){
         <label>جهة الإرسال<select id="f_from">${optsWithAll(CITIES, rec?.from_city)}</select></label>
         <label>جهة الوجهة<select id="f_to">${optsWithAll(CITIES, rec?.to_city)}</select></label>
       </div>
+      <h3 class="sub">الحمولة</h3>
+      <div class="filters">
+        ${fld("f_weight","الوزن (كغ)", rec?.weight_kg||"", "number")}
+        ${fld("f_pieces","العدد", rec?.pieces||"", "number")}
+        ${fld("f_items","الأصناف", rec?.items_desc)}
+      </div>
       <h3 class="sub">الطرف العراقي</h3>
       <div class="filters">
         ${fld("f_idrv","اسم السائق العراقي", rec?.iraqi_driver)}
@@ -1381,7 +1393,7 @@ async function cnForm(rec){
       <p class="hint">اترك السطر فارغاً إن لم يُستعمل — لا يُحفظ. لكل بند عملته،
         والمجموع يُحسب لكل عملة على حدة.</p>
       ${wrapTable(`<table><thead><tr><th>التفاصيل</th><th>المبلغ</th>
-          <th>العملة</th><th>نوع - عدد</th></tr></thead>
+          <th>العملة</th></tr></thead>
         <tbody>${labels.map((lb,i)=>{
           const s=saved.get(lb)||{};
           return `<tr data-i="${i}"><td class="nowrap rc-label">${lb}</td>
@@ -1389,12 +1401,10 @@ async function cnForm(rec){
               value="${s.amount||""}" placeholder="0"></td>
             <td><select class="cell-in" data-cur>
               ${meta.currencies.map(c=>`<option ${c===(s.currency||CN_USD)?"selected":""}>${c}</option>`).join("")}
-            </select></td>
-            <td><input class="cell-in" data-kc value="${(s.kind_count||"").replace(/"/g,"&quot;")}"
-              placeholder="نوع / عدد"></td></tr>`;
+            </select></td></tr>`;
         }).join("")}
         <tr class="total-row"><td><b>المجموع الكلي</b></td>
-          <td colspan="3"><b id="ktot">—</b></td></tr>
+          <td colspan="2"><b id="ktot">—</b></td></tr>
         </tbody></table>`)}
     </div>`;
 
@@ -1402,7 +1412,6 @@ async function cnForm(rec){
     label: tr.querySelector(".rc-label").textContent.trim(),
     amount: Number(tr.querySelector("[data-amt]").value)||0,
     currency: tr.querySelector("[data-cur]").value,
-    kind_count: tr.querySelector("[data-kc]").value.trim(),
     sort_order: i}));
   const retotal=()=>{
     const ls=gather();
@@ -1420,6 +1429,8 @@ async function cnForm(rec){
       iraqi_driver:$("#f_idrv").value, iraqi_plate:$("#f_ipl").value,
       iraqi_phone:$("#f_iph").value, syrian_driver:$("#f_sdrv").value,
       syrian_plate:$("#f_spl").value, syrian_phone:$("#f_sph").value,
+      weight_kg:$("#f_weight").value, pieces:$("#f_pieces").value,
+      items_desc:$("#f_items").value,
       notes:$("#f_notes").value, lines:gather()};
     try{
       const saved = isEdit ? await API.put("/api/containers/"+rec.id, body)
@@ -1472,17 +1483,20 @@ async function cnReceipt(id){
         ${f("رقم الموبايل السوري", r.syrian_phone)}
         ${f("جهة الإرسال", r.from_city)}
         ${f("جهة الوجهة", r.to_city)}
+        ${f("الوزن", r.weight_kg?Number(r.weight_kg).toLocaleString("en")+" كغ":"")}
+        ${f("العدد", r.pieces||"")}
       </div>
+      ${r.items_desc?`<div class="rc-f rc-wide"><span>الأصناف</span>
+        <b>${r.items_desc}</b></div>`:""}
       <table class="rc-items"><thead><tr>
-        <th class="rc-h1">التفاصيل</th><th>المبلغ ( بالدينار - بالدولار )</th>
-        <th>نوع - عدد</th></tr></thead>
+        <th class="rc-h1">التفاصيل</th>
+        <th>المبلغ ( بالدينار - بالدولار )</th></tr></thead>
       <tbody>${shown.map(l=>`<tr>
         <td class="rc-label">${l.label}</td>
-        <td>${l.amount?cnMoney(l.amount,l.currency):""}</td>
-        <td>${l.kind_count||""}</td></tr>`).join("")}
+        <td>${l.amount?cnMoney(l.amount,l.currency):""}</td></tr>`).join("")}
         <tr class="rc-total"><td class="rc-label">المجموع الكلي</td>
           <td>${usd?cnMoney(usd,CN_USD):""}${usd&&iqd?" + ":""}${iqd?cnMoney(iqd,CN_IQD):""}
-            ${!usd&&!iqd?"—":""}</td><td></td></tr>
+            ${!usd&&!iqd?"—":""}</td></tr>
       </tbody></table>
       ${r.notes?`<p class="rc-notes"><b>ملاحظات:</b> ${r.notes}</p>`:""}
     </div>`;
