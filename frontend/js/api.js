@@ -18,18 +18,45 @@ const API = {
   async login(username,password){
     const body=new URLSearchParams({username,password});
     const r=await fetch(this.base+"/api/auth/login",{method:"POST",body});
-    if(!r.ok) throw new Error((await r.json()).detail||"فشل الدخول");
+    if(!r.ok) throw new Error(await this.errText(r,"فشل الدخول"));
     const d=await r.json(); this.save(d); return d;
+  },
+  // رسالة الخطأ من رد الخادم. الرد قد لا يكون JSON إطلاقاً: خطأ خادم خام،
+  // أو صفحة HTML من وسيط/بوابة (502/504). قراءته كـJSON مباشرةً كانت تُسقط
+  // التحليل فتظهر رسالة «Unexpected token … is not valid JSON» بدل السبب الحقيقي.
+  async errText(r, fallback="تعذّر تنفيذ الطلب"){
+    let raw="";
+    try{ raw=await r.text(); }catch(e){ raw=""; }
+    try{
+      const j=JSON.parse(raw);
+      if(j && j.detail){
+        // أخطاء التحقّق في FastAPI تأتي مصفوفةً من كائنات
+        if(Array.isArray(j.detail))
+          return j.detail.map(d=>d.msg||JSON.stringify(d)).join("، ");
+        return typeof j.detail==="string" ? j.detail : JSON.stringify(j.detail);
+      }
+    }catch(e){/* ليس JSON — نكمل بالنص الخام */}
+    const snippet=raw.replace(/<[^>]*>/g," ").replace(/\s+/g," ").trim().slice(0,160);
+    if(r.status>=500) return `خطأ في الخادم (${r.status})${snippet?": "+snippet:""}`;
+    if(r.status===0 || !r.status) return "تعذّر الوصول إلى الخادم";
+    return snippet ? `${fallback} (${r.status}): ${snippet}` : `${fallback} (${r.status})`;
   },
   async req(path,{method="GET",body=null,params=null}={}){
     let url=this.base+path;
     if(params){const q=new URLSearchParams(Object.entries(params).filter(([,v])=>v));url+="?"+q;}
     const opt={method,headers:{Authorization:"Bearer "+this.token}};
     if(body){opt.headers["Content-Type"]="application/json";opt.body=JSON.stringify(body);}
-    const r=await fetch(url,opt);
+    let r;
+    try{ r=await fetch(url,opt); }
+    catch(e){ throw new Error("تعذّر الوصول إلى الخادم — تحقّق من الاتصال"); }
     if(r.status===401){this.clear();location.reload();return;}
-    if(!r.ok) throw new Error((await r.json()).detail||"خطأ");
-    return r.status===204?null:r.json();
+    if(!r.ok) throw new Error(await this.errText(r));
+    if(r.status===204) return null;
+    // حتى الرد الناجح قد يصل مبتوراً أو غير JSON إن تدخّل وسيط
+    const raw=await r.text();
+    if(!raw) return null;
+    try{ return JSON.parse(raw); }
+    catch(e){ throw new Error("رد الخادم غير مفهوم — أعد المحاولة، وإن تكرّر أبلغ الدعم"); }
   },
   get(p,params){return this.req(p,{params});},
   post(p,body){return this.req(p,{method:"POST",body});},
@@ -41,7 +68,7 @@ const API = {
       headers:{Authorization:"Bearer "+this.token,"Content-Type":"application/json"},
       body:JSON.stringify(body)});
     if(r.status===401){this.clear();location.reload();return;}
-    if(!r.ok) throw new Error((await r.json()).detail||"تعذّر التصدير");
+    if(!r.ok) throw new Error(await this.errText(r,"تعذّر التصدير"));
     const blob=await r.blob();
     // داخل برنامج سطح المكتب (WebView2) لا يعمل تنزيل الروابط المؤقتة (blob)،
     // فنمرّر الملف إلى بايثون ليحفظه عبر نافذة «حفظ باسم» الأصلية.
@@ -65,7 +92,7 @@ const API = {
     const fd=new FormData(); fd.append("file",file);
     const r=await fetch(this.base+path,{method:"POST",headers:{Authorization:"Bearer "+this.token},body:fd});
     if(r.status===401){this.clear();location.reload();return;}
-    if(!r.ok) throw new Error((await r.json()).detail||"خطأ");
+    if(!r.ok) throw new Error(await this.errText(r,"تعذّر الرفع"));
     return r.json();
   },
 };

@@ -3,7 +3,9 @@
 import os
 import sys
 import threading
-from fastapi import FastAPI
+import traceback
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -47,6 +49,21 @@ async def _no_cache_shell(request, call_next):
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
     return response
+
+@app.exception_handler(Exception)
+async def _json_errors(request: Request, exc: Exception):
+    """أي خطأ غير متوقَّع يعود JSON برسالة عربية مفهومة.
+
+    الافتراضي في Starlette نصٌّ خام «Internal Server Error»، فتنكسر قراءته في
+    الواجهة وتظهر للمستخدم رسالة عن JSON لا علاقة لها بالسبب. هنا يظهر نوع
+    الخطأ ليُبلَّغ به، ويُطبع أثره كاملاً في سجل الخادم للتشخيص."""
+    traceback.print_exc()
+    name = type(exc).__name__
+    detail = str(exc).strip().replace("\n", " ")[:200]
+    return JSONResponse(status_code=500,
+                        content={"detail": f"خطأ في الخادم: {name}"
+                                           + (f" — {detail}" if detail else "")})
+
 
 app.include_router(auth.router)
 app.include_router(shipments.router)

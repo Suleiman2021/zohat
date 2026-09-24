@@ -1281,8 +1281,9 @@ async function vContainers(){
     const p={date_from:$("#kdf").value, date_to:$("#kdt").value, ref:$("#kref").value,
              trader:$("#ktr").value, driver:$("#kdrv").value, plate:$("#kpl").value,
              phone:$("#kph").value, from_city:$("#kfc").value, to_city:$("#ktc").value};
-    rows=await API.get("/api/containers", p);
-    paint();
+    // بلا هذا الالتقاط يفشل الجلب صامتاً فيبدو الجدول فارغاً كأن لا بيانات
+    try{ rows=await API.get("/api/containers", p); paint(); }
+    catch(err){ rows=[]; $("#ktbl").innerHTML=empty("تعذّر جلب الحاويات: "+err.message); }
   };
   const paint=()=>{
     if(!rows.length){ $("#ktbl").innerHTML=empty("لا توجد حاويات مطابقة"); return; }
