@@ -480,11 +480,16 @@ function renderExportedDrill(rows, drill, reload){
     day=>renderShip(day, EXPORTED, reload), "لا توجد شحنات مصدَّرة");
 }
 
-// مؤشرات سجل الشحنات (للمدير العام ومسؤول التجميع): الأعداد والأوزان،
+// الواصل نقداً لشحنة واحدة: أجورها إن كان دفعها «واصل نقداً» + ثمن بضاعتها مع
+// عمولتها إن كانت «تم التحصيل». هذا نفس تعريف لوحة التقارير بالضبط، فتتطابق
+// أرقام اللوحتين على نفس الفلاتر بدل أن تختلف تحت العنوان نفسه.
+const shipCashIn = r => (r.fees_payment==="واصل نقداً" ? (Number(r.fees_total)||0) : 0)
+  + (r.collection_status==="تم التحصيل" ? goodsWithCommission(r) : 0);
+
+// مؤشرات سجل الشحنات لكل الأدوار التي ترى السجل: الأعداد والأوزان والواصل نقداً،
 // مع تفكيك الوزن حسب السائق — تُحسب دائماً على ما هو معروض أمامك
 function shipKpis(rows, scope){
   const box=$("#skpi"); if(!box) return;
-  if(!["admin","collector"].includes(API.role)){ box.innerHTML=""; return; }
   if(!rows || !rows.length){ box.innerHTML=""; return; }
   const kg=n=>(Number(n)||0).toLocaleString("en",{maximumFractionDigits:1})+" كغ";
   const sum=k=>rows.reduce((a,r)=>a+(Number(r[k])||0),0);
@@ -502,9 +507,15 @@ function shipKpis(rows, scope){
     <div class="kpis">
       ${card("عدد الشحنات", rows.length)}
       ${card("عدد الزبائن", owners.size)}
+      ${card("إجمالي العدد", rows.reduce((a,r)=>a+(Number(r.count)||0),0))}
       ${card("إجمالي الوزن", kg(sum("weight_kg")), "gold")}
       ${card("إجمالي أجور الشحن والجمركة", money(sum("fees_total")))}
+      ${card("إجمالي الواصل نقداً",
+             money(rows.reduce((a,r)=>a+shipCashIn(r),0)), "cash")}
     </div>
+    <p class="hint">الواصل نقداً = أجور الشحن والجمركة إن كان دفعها «واصل نقداً»
+      + ثمن البضاعة والعمولة إن كانت حالة التحصيل «تم التحصيل» — نفس تعريف لوحة
+      التقارير، فيتطابق الرقمان على نفس الفلاتر.</p>
     ${drv.length?`<h3 class="sub">إجمالي الوزن حسب السائق</h3>
       ${wrapTable(`<table><thead><tr><th>السائق</th><th>عدد الشحنات</th>
         <th>إجمالي الوزن</th></tr></thead><tbody>${drv.map(([d,v])=>`<tr>
@@ -528,8 +539,9 @@ function renderShip(rows, tab, load){
   const selectable = canExport || canBulkExported || canBulkDelete;
   const h=[];
   if(selectable) h.push(`<th class="chk-col"><input type="checkbox" id="selAll"></th>`);
-  h.push(...["القيد","التاريخ","المسجِّل","المرسِل","المستلِم","من→إلى","الصنف","الوزن",
-    "أجور الشحن","حالة الجمركة","حالة التصدير","حالة التسليم","إجراءات"].map(x=>`<th>${x}</th>`));
+  h.push(...["القيد","التاريخ","المسجِّل","المرسِل","المستلِم","من→إلى","الصنف","العدد","الوزن",
+    "أجور الشحن","الواصل نقداً","حالة الجمركة","حالة التصدير","حالة التسليم",
+    "إجراءات"].map(x=>`<th>${x}</th>`));
   // الحذف: الإدارة والمشرف لأي شحنة، ومسؤول التجميع لشحناته هو
   // ما دامت قيد التصدير فقط (لا ما سجّله غيره ولا ما خرج للوجهة)
   const canDel = r => (isAdmin || API.role==="supervisor") ||
@@ -544,8 +556,9 @@ function renderShip(rows, tab, load){
       <td>${r.created_by_name||r.created_by||"-"}</td>
       <td>${r.sender_name||"-"}</td><td>${r.receiver_name||"-"}</td>
       <td class="nowrap">${r.from_city} ← ${r.to_city}</td>
-      <td>${r.item_name||"-"}</td><td>${r.weight_kg} كغ</td>
+      <td>${r.item_name||"-"}</td><td>${r.count||0}</td><td>${r.weight_kg} كغ</td>
       <td>${money(r.fees_total)}</td>
+      <td class="${shipCashIn(r)>0?'pos':''}">${money(shipCashIn(r))}</td>
       <td>${statusBadge(r.customs_status, r.customs_computed)}</td>
       <td>${statusBadge(r.export_status, r.export_status===EXPORTED)}${r.export_date?`<div class="mini">${r.export_date}</div>`:''}</td>
       <td>${statusBadge(r.delivery_status, r.delivery_status==='تم التسليم')}</td>
